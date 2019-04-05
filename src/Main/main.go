@@ -1,286 +1,467 @@
 package main
 
 import (
-	"bufio"
-	"crypto/cipher"
-	"crypto/des"
 	"encoding/base64"
 	"fmt"
-	"io"
+	"io/ioutil"
 	"log"
+	"math/rand"
 	"net"
+	"os"
+	"strconv"
 	"strings"
-	"unicode"
+	"time"
 
-	"golang.org/x/crypto/md4"
+	"github.com/ThomsonReutersEikon/go-ntlm/ntlm"
 )
 
 func print(bs []byte) {
 	count := 0
+	strs := ""
 	for _, n := range bs {
 		fmt.Printf("%02x ", n) // prints 1111111111111101
+		if n >= 0x20 && n < 0x7f {
+			strs += string(n)
+		} else {
+			strs += "."
+		}
 		count++
 		if count%16 == 0 {
-			fmt.Printf("\n")
+			fmt.Printf("%s\n", strs)
+			strs = ""
 		} else if count%8 == 0 {
+			fmt.Printf(" ")
+			strs += " "
+		}
+	}
+	for count := len(bs); count%16 != 0; count++ {
+		fmt.Print("   ")
+		if count%8 == 0 {
 			fmt.Printf(" ")
 		}
 	}
-	fmt.Printf("\n")
+	fmt.Printf("%s\n", strs)
 }
 
-func print21(bs [21]byte) {
-	for _, n := range bs {
-		fmt.Printf("%02x ", n) // prints 1111111111111101
+func createRandom(size int) []byte {
+	rand.Seed(time.Now().UnixNano())
+	buf := make([]byte, 0)
+	for i := 0; i < size; i++ {
+		buf = append(buf, byte(rand.Int()%256))
 	}
-	fmt.Printf("\n")
+	return buf
 }
 
-func print24(bs [24]byte) {
-	for _, n := range bs {
-		fmt.Printf("%02x ", n) // prints 1111111111111101
+func ReadLine(conn *net.TCPConn) string {
+	buf := make([]byte, 1)
+	line := make([]byte, 0)
+	var old byte
+	for {
+		conn.Read(buf)
+		// fmt.Printf("%c", buf[0])
+		if old == 0x0d && buf[0] == 0x0a {
+			return string(line)
+		}
+		if old != 0x00 {
+			line = append(line, old)
+		}
+		old = buf[0]
 	}
-	fmt.Printf("\n")
 }
 
-/* setup LanManager password */
-func setup_lmpasswd(passw []byte) [14]byte {
-	var lm_pw [14]byte
-	len := len(passw)
-	if len > 14 {
-		len = 14
-	}
-
-	idx := 0
-	for ; idx < len; idx++ {
-		lm_pw[idx] = byte(unicode.ToUpper(rune(passw[idx])))
-	}
-	for ; idx < 14; idx++ {
-		lm_pw[idx] = 0
-	}
-	return lm_pw
-}
-
-/* create LanManager hashed password */
-func create_lm_hashed_passwd(passw []byte) [21]byte {
-	var magic []byte = []byte{0x4B, 0x47, 0x53, 0x21, 0x40, 0x23, 0x24, 0x25}
-	// lm_hpw := make([]byte, 21)
-	var lm_hpw [21]byte
-	// var ks des_key_schedule
-	lm_pw := setup_lmpasswd(passw)
-
-	// setup_des_key(lm_pw, ks)
-	ks := setup_des_key(lm_pw[:7])
-	// des_ecb_encrypt(magic, lm_hpw, ks)
-	ks.Encrypt(lm_hpw[:8], magic)
-
-	// setup_des_key(lm_pw+7, ks)
-	ks = setup_des_key(lm_pw[7:14])
-	// des_ecb_encrypt(magic, lm_hpw+8, ks)
-	ks.Encrypt(lm_hpw[8:], magic)
-
-	// memset(lm_hpw+16, 0, 5)
-	return lm_hpw
-}
-
-/* create NT hashed password */
-func create_nt_hashed_passwd(passw []byte) [21]byte {
-	len := len(passw)
-	nt_pw := make([]byte, 2*len)
-	for idx := 0; idx < len; idx++ {
-		nt_pw[2*idx] = passw[idx]
-		nt_pw[2*idx+1] = 0
-	}
-
-	var nt_hpw [21]byte
-	// MD4_CTX context;
-	// MD4Init(&context);
-	// MD4Update(&context, nt_pw, 2*len);
-	// MD4Final(nt_hpw, &context);
-	context := md4.New()
-	io.WriteString(context, string(nt_pw))
-	hashed := context.Sum(nil)
-
-	for idx := 0; idx < 16; idx++ {
-		nt_hpw[idx] = hashed[idx]
-	}
-
-	// memset(nt_hpw+16, 0, 5)
-	return nt_hpw
-}
-
-/* create responses */
-func create_response(passw []byte) {
-	// var lm_resp [24]byte
-	// var nt_resp [24]byte
-	nonce := make_nonce()
-
-	lm_hpw := create_lm_hashed_passwd(passw)
-	print21(lm_hpw)
-	lm_resp := calc_resp(lm_hpw, nonce)
-	print24(lm_resp)
-	nt_hpw := create_nt_hashed_passwd(passw)
-	print21(nt_hpw)
-	nt_resp := calc_resp(nt_hpw, nonce)
-	print24(nt_resp)
-}
-
-/*
- * takes a 21 byte array and treats it as 3 56-bit DES keys. The
- * 8 byte plaintext is encrypted with each key and the resulting 24
- * bytes are stored in the results array.
- */
-func calc_resp(keys [21]byte, plaintext []byte) [24]byte {
-	var result [24]byte
-	var cipher cipher.Block
-
-	cipher = setup_des_key(keys[:7])
-	//  des_ecb_encrypt((des_cblock*) plaintext, (des_cblock*) results, ks, DES_ENCRYPT);
-	cipher.Encrypt(result[:8], plaintext)
-
-	//  setup_des_key(keys+7, ks);
-	cipher = setup_des_key(keys[7:14])
-	//  des_ecb_encrypt((des_cblock*) plaintext, (des_cblock*) (results+8), ks, DES_ENCRYPT);
-	cipher.Encrypt(result[8:16], plaintext)
-
-	//  setup_des_key(keys+14, ks);
-	cipher = setup_des_key(keys[14:21])
-	//  des_ecb_encrypt((des_cblock*) plaintext, (des_cblock*) (results+16), ks, DES_ENCRYPT);
-	cipher.Encrypt(result[16:24], plaintext)
-
-	return result
-}
-
-/*
- * turns a 56 bit key into the 64 bit, odd parity key and sets the key.
- * The key schedule ks is also set.
- */
-func setup_des_key(key_56 []byte) cipher.Block {
-	key := make([]byte, 8)
-	key[0] = key_56[0]
-	key[1] = ((key_56[0] << 7) & 0xFF) | (key_56[1] >> 1)
-	key[2] = ((key_56[1] << 6) & 0xFF) | (key_56[2] >> 2)
-	key[3] = ((key_56[2] << 5) & 0xFF) | (key_56[3] >> 3)
-	key[4] = ((key_56[3] << 4) & 0xFF) | (key_56[4] >> 4)
-	key[5] = ((key_56[4] << 3) & 0xFF) | (key_56[5] >> 5)
-	key[6] = ((key_56[5] << 2) & 0xFF) | (key_56[6] >> 6)
-	key[7] = (key_56[6] << 1) & 0xFF
-
-	//  des_set_odd_parity(&key);
-	//  des_set_key(&key, ks);
-	block, _ := des.NewCipher(key)
-	return block
-}
-
-func make_nonce() []byte {
-	nonce := make([]byte, 16)
-	nonce[0] = 'S'
-	nonce[1] = 'r'
-	nonce[2] = 'v'
-	nonce[3] = 'N'
-	nonce[4] = 'o'
-	nonce[5] = 'n'
-	nonce[6] = 'c'
-	nonce[7] = 'e'
-
-	return nonce
-}
-
-func handleConnection(conn *net.TCPConn) {
-	defer conn.Close()
-
-	// buf := make([]byte, 4*1024)
-
-	// n, err := conn.Read(buf)
-	// if err != nil {
-	// 	if ne, ok := err.(net.Error); ok {
-	// 		switch {
-	// 		case ne.Temporary():
-	// 			continue
-	// 		}
-	// 	}
-	// 	log.Println("Read", err)
-	// 	return
-	// }
-
-	phase := 0
-	// fmt.Printf("%s", buf[:n])
-	scanner := bufio.NewScanner(conn)
-	for scanner.Scan() {
-		line := scanner.Text()
-		fmt.Printf("%s\n", line)
-		if strings.HasPrefix(line, "Authorization:") {
-			index := strings.Index(line, "NTLM") + 5
-			type1msg := make([]byte, 4*1024)
-			size, _ := base64.StdEncoding.Decode(type1msg, []byte(line[index:]))
-			type1msg = type1msg[:size]
-			switch phase {
-			case 0:
-				type2msg := make([]byte, 40)
-				type2msg[0] = 'N'
-				type2msg[1] = 'T'
-				type2msg[2] = 'L'
-				type2msg[3] = 'M'
-				type2msg[4] = 'S'
-				type2msg[5] = 'S'
-				type2msg[6] = 'P'
-				type2msg[7] = 0
-				type2msg[8] = 2
-				type2msg[16] = 40
-				type2msg[17] = 0
-				type2msg[20] = 0x01
-				type2msg[21] = 0x82
-				nonce := make_nonce()
-				for idx := 0; idx < 8; idx++ {
-					type2msg[idx+24] = nonce[idx]
-				}
-				type2msg_base64 := base64.StdEncoding.EncodeToString(type2msg)
-
-				conn.Write([]byte("HTTP/1.1 401 Unauthorized\r\n"))
-				conn.Write([]byte("WWW-Authenticate: NTLM " + type2msg_base64 + "\r\n"))
-				conn.Write([]byte("\r\n"))
-
-				phase = 1
+func authNtlm(conn *net.TCPConn, IN bool) bool {
+	phase := 3
+	session, _ := ntlm.CreateServerSession(ntlm.Version2, ntlm.ConnectionlessMode)
+	session.SetUserInfo(USERNAME, PASSWORD, "")
+	auth := ""
+	for {
+		// fmt.Println("=>" + strconv.Itoa(phase))
+		line := ReadLine(conn)
+		// fmt.Printf("%s\n", line)
+		if line == "" {
+			phase--
+			if phase == 0 {
 				break
+			} else if phase == 1 {
+				auth = auth[strings.Index(auth, "Negotiate")+10:]
+				fmt.Println("Auth: " + auth)
+				data, _ := base64.StdEncoding.DecodeString(auth)
+				am, _ := ntlm.ParseAuthenticateMessage(data, 2)
+				err := session.ProcessAuthenticateMessage(am)
+				if err != nil {
+					log.Println(err)
+					return false
+				}
+				conn.Write([]byte("HTTP/1.1 200 OK\r\n"))
+				conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
+				if IN {
+					conn.Write([]byte("Content-Length: 0\r\n"))
+				}
+				conn.Write([]byte("\r\n"))
+				if !IN {
+					conn.Write([]byte{0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd})
+				}
+			} else if phase == 2 {
+				auth = auth[strings.Index(auth, "NTLM")+5:]
+				fmt.Println("Auth: " + auth)
+				session.ProcessNegotiateMessage(nil)
+				challenge, _ := session.GenerateChallengeMessage()
+				// fmt.Print("Challenge: " + challenge.String())
+				chaMsg := base64.StdEncoding.EncodeToString(challenge.Bytes())
+				fmt.Println("Challenge: " + chaMsg)
+				conn.Write([]byte("HTTP/1.1 401 Unauthorized\r\n"))
+				conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
+				conn.Write([]byte("WWW-Authenticate: Negotiate " + chaMsg + "\r\n"))
+				conn.Write([]byte("Content-Length: 0\r\n"))
+				conn.Write([]byte("\r\n"))
+			}
+		} else if strings.HasPrefix(line, "Authorization:") {
+			auth = line
+		}
+	}
+	return true
+}
 
-			case 1:
-				print(type1msg)
-				var lm_resp_offset int = 0
-				lm_resp_offset = int(type1msg[16])
-				lm_resp_offset |= int(type1msg[17]) << 8
-				fmt.Printf("Host Offset: %d\n", lm_resp_offset)
-				print(type1msg[lm_resp_offset : lm_resp_offset+24])
+func RPC_IN_DATA(conn *net.TCPConn) bool {
+	fmt.Println("Accepted IN.")
+	line := ReadLine(conn)
+	fmt.Printf("%s\n", line)
+	if !strings.HasPrefix(line, "RDG_IN_DATA ") {
+		conn.Close()
+		return false
+	}
+	if !authNtlm(conn, true) {
+		return false
+	}
+	fmt.Println("Start IN.")
+	return true
+}
+
+func RPC_OUT_DATA(conn *net.TCPConn) bool {
+	fmt.Println("Accepted OUT.")
+	line := ReadLine(conn)
+	fmt.Printf("%s\n", line)
+	if !strings.HasPrefix(line, "RDG_OUT_DATA ") {
+		conn.Close()
+		return false
+	}
+	if !authNtlm(conn, false) {
+		return false
+	}
+	fmt.Println("Start OUT.")
+	return true
+}
+
+func ReadHTTPPacket(IN *net.TCPConn) (byte, []byte) {
+	ReadLine(IN) // skip until "\r\n"
+	buf := make([]byte, 1)
+	// packet type
+	IN.Read(buf)
+	packettype := buf[0]
+	IN.Read(buf)
+	IN.Read(buf)
+	IN.Read(buf)
+	// packet length
+	IN.Read(buf)
+	length := int(buf[0])
+	IN.Read(buf)
+	length |= (int(buf[0]) << 8)
+	IN.Read(buf)
+	length |= (int(buf[0]) << 16)
+	IN.Read(buf)
+	length |= (int(buf[0]) << 24)
+	// fmt.Printf("=>Type: %d, len: %d\n", packettype, length)
+	body := make([]byte, 0)
+	for i := 8; i < length; i++ {
+		IN.Read(buf)
+		body = append(body, buf[0])
+	}
+	// print(body)
+	IN.Read(buf) // 0x0d
+	IN.Read(buf) // 0x0a
+	return packettype, body
+}
+
+func WriteHTTPPacket(OUT *net.TCPConn, packettype int, body []byte) {
+	packet := make([]byte, 0)
+	packet = append(packet, byte(packettype))
+	packet = append(packet, 0)
+	packet = append(packet, 0)
+	packet = append(packet, 0)
+	length := len(body) + 8
+	packet = append(packet, byte(0xff&length))
+	packet = append(packet, byte(0xff&(length>>8)))
+	packet = append(packet, byte(0xff&(length>>16)))
+	packet = append(packet, byte(0xff&(length>>24)))
+	packet = append(packet, body...)
+	// fmt.Printf("<=Type: %d, len: %d\n", packettype, len(packet))
+	// print(packet)
+	OUT.Write(packet)
+}
+
+func handle(IN, OUT *net.TCPConn) error {
+	defer IN.Close()
+	defer OUT.Close()
+
+	ptype, body := ReadHTTPPacket(IN)
+	response := make([]byte, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 1)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	WriteHTTPPacket(OUT, 0x2, response)
+	ptype, body = ReadHTTPPacket(IN)
+
+	// TUNNEL RESPONSE
+	response = make([]byte, 0)
+	// server version
+	response = append(response, 0)
+	response = append(response, 0)
+	// status code
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	// fields present
+	response = append(response, 3) // 1: tunnel id, 2: caps, 4: nonce & server cert
+	response = append(response, 0)
+	// reserved
+	response = append(response, 0)
+	response = append(response, 0)
+	// tunnel ID
+	response = append(response, 0x0a)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	// caps flag
+	response = append(response, 0x3f) // 0x3f
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	// // nonce (20bytes)
+	// response = append(response, createRandom(16)...)
+	// // server cert
+	// cert := readCert()
+	// response = append(response, byte(0xff&len(cert)))
+	// response = append(response, byte(0xff&(len(cert)>>8)))
+	// response = append(response, cert...)
+	WriteHTTPPacket(OUT, 0x5, response)
+	ptype, body = ReadHTTPPacket(IN)
+
+	// TUNNEL AUTH RESPONSE
+	response = make([]byte, 0)
+	// error code (4byte)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	// flag (2byte)
+	response = append(response, 3)
+	response = append(response, 0)
+	// reserved (2byte)
+	response = append(response, 0)
+	response = append(response, 0)
+	// redir flag (2byte)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0x80)
+	// idle timeout (4byte)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	response = append(response, 0)
+	// // HTTP blob len
+	// response = append(response, 0)
+	// response = append(response, 0)
+	WriteHTTPPacket(OUT, 0x7, response)
+
+	for {
+		ptype, body = ReadHTTPPacket(IN)
+		server := make([]byte, 0)
+		for i := 8; i < len(body)-2; i += 2 {
+			server = append(server, body[i])
+		}
+		port := (0xff & int(body[2]))
+		port |= (0xff & int(body[3])) << 8
+		fmt.Println(string(server) + ":" + strconv.Itoa(port))
+		if port != 3389 {
+			return nil
+		}
+
+		// HTTP CHANNEL RESPONSE
+		response = make([]byte, 0)
+		// error code (4byte)
+		response = append(response, 0)
+		response = append(response, 0)
+		response = append(response, 0)
+		response = append(response, 0)
+		// fields present (2byte)
+		response = append(response, 1) // 1: channel id, 4: udp, 2: udp cookie
+		response = append(response, 0)
+		// reserved (2byte)
+		response = append(response, 0)
+		response = append(response, 0)
+		// channel id (4byte)
+		response = append(response, 1)
+		response = append(response, 0)
+		response = append(response, 0)
+		response = append(response, 0)
+		// // UDP port (2byte)
+		// response = append(response, 0x3f)
+		// response = append(response, 0x0d)
+		// // HTTP blob len (2byte)
+		// response = append(response, 1)
+		// response = append(response, 0)
+		// response = append(response, 1)
+		WriteHTTPPacket(OUT, 0x9, response)
+
+		rdp, _ := net.Dial("tcp4", string(server)+":"+strconv.Itoa(port))
+		defer rdp.Close()
+
+		go func() {
+			stuck := make([]byte, 0)
+			buf := make([]byte, 0xffff)
+			for {
+				size, err := rdp.Read(buf)
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				stuck = append(stuck, buf[:size]...)
+				// fmt.Printf("Len: %d\n", size)
+				for {
+					if len(stuck) <= 3 {
+						break
+					}
+					// print(stuck[:5])
+					realSize := (0xff & int(stuck[3])) | (0xff & int(stuck[2]) << 8)
+					realSize &= 0x3fff
+					if 0x80&stuck[1] != 0 {
+						realSize = (0xff & int(stuck[2])) | (0x7f & int(stuck[1]) << 8)
+					}
+					if stuck[1] == 0x03 && stuck[2] == 0x03 {
+						realSize = (0xff & int(stuck[4])) | (0xff & int(stuck[3]) << 8)
+						realSize += 5
+					}
+					// fmt.Printf("Size: %04x %d %d %04x\n", realSize, realSize, len(stuck), len(stuck))
+					if len(stuck) < realSize {
+						break
+					}
+					// fmt.Printf("Size: %04x\n", realSize)
+					packet := make([]byte, 0)
+					packet = append(packet, 0xff&byte(realSize))
+					packet = append(packet, 0xff&byte(realSize>>8))
+					packet = append(packet, stuck[:realSize]...)
+					WriteHTTPPacket(OUT, 0x0a, packet)
+					stuck = stuck[realSize:]
+				}
+			}
+		}()
+
+		for {
+			ptype, body = ReadHTTPPacket(IN)
+			if ptype == 10 {
+				size := (0xff & int(body[0])) | (0xff & int(body[1]) << 8)
+				rdp.Write(body[2:(size + 2)])
+			} else if ptype == 16 {
+				rdp.Close()
+				WriteHTTPPacket(OUT, 0x11, []byte{0, 0, 0, 0})
 				break
 			}
 		}
 	}
-	// n, err = conn.Write(buf[:n])
-	// if err != nil {
-	//     log.Println("Write", err)
-	//     return
-	// }
+}
+
+func pipe(conn *net.TCPConn) {
+	fmt.Println("Accepted.")
+	tcpAddr, _ := net.ResolveTCPAddr("tcp4", "winsvr2012-1:80")
+	rdg, _ := net.DialTCP("tcp4", nil, tcpAddr)
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			size, _ := rdg.Read(buf)
+			if size > 0 {
+				print(buf[:size])
+				conn.Write(buf[:size])
+			}
+		}
+	}()
+	buf := make([]byte, 2048)
+	for {
+		size, _ := conn.Read(buf)
+		if size > 0 {
+			print(buf[:size])
+			rdg.Write(buf[:size])
+		}
+	}
+}
+
+func readCert() []byte {
+	f, err := os.Open("cert")
+	if err != nil {
+		fmt.Println("error")
+	}
+	defer f.Close()
+
+	// 一気に全部読み取り
+	b, err := ioutil.ReadAll(f)
+	// fmt.Print(string(b))
+
+	buf := make([]byte, 0)
+	for _, v := range b {
+		buf = append(buf, v)
+		buf = append(buf, 0)
+	}
+	buf = append(buf, 0)
+	buf = append(buf, 0)
+	// print(buf)
+	return buf
 }
 
 func handleListener(l *net.TCPListener) error {
 	defer l.Close()
 	for {
+		var conn *net.TCPConn
 		conn, err := l.AcceptTCP()
 		if err != nil {
-			if ne, ok := err.(net.Error); ok {
-				if ne.Temporary() {
-					log.Println("AcceptTCP", err)
-					continue
-				}
-			}
+			log.Println(err)
 			return err
 		}
+		go RPC_OUT_DATA(conn)
+		// go pipe(conn)
 
-		go handleConnection(conn)
+		conn2, err := l.AcceptTCP()
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+		// pipe(conn2)
+
+		go func() {
+			RPC_IN_DATA(conn2)
+			handle(conn2, conn)
+		}()
 	}
 }
 
+var USERNAME string = ""
+var PASSWORD string = ""
+
 func main() {
-	create_response([]byte("Beeblebrox"))
+	if len(os.Args) < 3 {
+		fmt.Println("usage: rdg [user] [pass]")
+		return
+	}
+	USERNAME = os.Args[1]
+	PASSWORD = os.Args[2]
+
 	tcpAddr, err := net.ResolveTCPAddr("tcp", "0.0.0.0:10080")
 	if err != nil {
 		log.Println("ResolveTCPAddr", err)
