@@ -52,15 +52,21 @@ func createRandom(size int) []byte {
 	return buf
 }
 
-func ReadLine(conn *net.TCPConn) string {
+func ReadLine(conn *net.TCPConn) (string, error) {
 	buf := make([]byte, 1)
 	line := make([]byte, 0)
 	var old byte
 	for {
-		conn.Read(buf)
+		size, err := conn.Read(buf)
+		if err != nil {
+			return "", err
+		}
+		if size == 0 {
+			continue
+		}
 		// fmt.Printf("%c", buf[0])
 		if old == 0x0d && buf[0] == 0x0a {
-			return string(line)
+			return string(line), nil
 		}
 		if old != 0x00 {
 			line = append(line, old)
@@ -76,7 +82,11 @@ func authNtlm(conn *net.TCPConn, IN bool) bool {
 	auth := ""
 	for {
 		// fmt.Println("=>" + strconv.Itoa(phase))
-		line := ReadLine(conn)
+		line, err := ReadLine(conn)
+		if err != nil {
+			log.Println(err)
+			return false
+		}
 		// fmt.Printf("%s\n", line)
 		if line == "" {
 			phase--
@@ -122,37 +132,7 @@ func authNtlm(conn *net.TCPConn, IN bool) bool {
 	return true
 }
 
-func RPC_IN_DATA(conn *net.TCPConn) bool {
-	fmt.Println("Accepted IN.")
-	line := ReadLine(conn)
-	fmt.Printf("%s\n", line)
-	if !strings.HasPrefix(line, "RDG_IN_DATA ") {
-		conn.Close()
-		return false
-	}
-	if !authNtlm(conn, true) {
-		return false
-	}
-	fmt.Println("Start IN.")
-	return true
-}
-
-func RPC_OUT_DATA(conn *net.TCPConn) bool {
-	fmt.Println("Accepted OUT.")
-	line := ReadLine(conn)
-	fmt.Printf("%s\n", line)
-	if !strings.HasPrefix(line, "RDG_OUT_DATA ") {
-		conn.Close()
-		return false
-	}
-	if !authNtlm(conn, false) {
-		return false
-	}
-	fmt.Println("Start OUT.")
-	return true
-}
-
-func ReadHTTPPacket(IN *net.TCPConn) (byte, []byte) {
+func ReadHTTPPacket(IN *net.TCPConn) (byte, []byte, error) {
 	ReadLine(IN) // skip until "\r\n"
 	buf := make([]byte, 1)
 	// packet type
@@ -177,12 +157,12 @@ func ReadHTTPPacket(IN *net.TCPConn) (byte, []byte) {
 		body = append(body, buf[0])
 	}
 	// print(body)
-	IN.Read(buf) // 0x0d
-	IN.Read(buf) // 0x0a
-	return packettype, body
+	IN.Read(buf)           // 0x0d
+	_, err := IN.Read(buf) // 0x0a
+	return packettype, body, err
 }
 
-func WriteHTTPPacket(OUT *net.TCPConn, packettype int, body []byte) {
+func WriteHTTPPacket(OUT *net.TCPConn, packettype int, body []byte) error {
 	packet := make([]byte, 0)
 	packet = append(packet, byte(packettype))
 	packet = append(packet, 0)
@@ -196,14 +176,18 @@ func WriteHTTPPacket(OUT *net.TCPConn, packettype int, body []byte) {
 	packet = append(packet, body...)
 	// fmt.Printf("<=Type: %d, len: %d\n", packettype, len(packet))
 	// print(packet)
-	OUT.Write(packet)
+	_, err := OUT.Write(packet)
+	return err
 }
 
 func handle(IN, OUT *net.TCPConn) error {
 	defer IN.Close()
 	defer OUT.Close()
 
-	ptype, body := ReadHTTPPacket(IN)
+	ptype, body, err := ReadHTTPPacket(IN)
+	if err != nil {
+		return err
+	}
 	response := make([]byte, 0)
 	response = append(response, 0)
 	response = append(response, 0)
@@ -215,8 +199,14 @@ func handle(IN, OUT *net.TCPConn) error {
 	response = append(response, 0)
 	response = append(response, 0)
 	response = append(response, 0)
-	WriteHTTPPacket(OUT, 0x2, response)
-	ptype, body = ReadHTTPPacket(IN)
+	err = WriteHTTPPacket(OUT, 0x2, response)
+	if err != nil {
+		return err
+	}
+	ptype, body, err = ReadHTTPPacket(IN)
+	if err != nil {
+		return err
+	}
 
 	// TUNNEL RESPONSE
 	response = make([]byte, 0)
@@ -251,8 +241,14 @@ func handle(IN, OUT *net.TCPConn) error {
 	// response = append(response, byte(0xff&len(cert)))
 	// response = append(response, byte(0xff&(len(cert)>>8)))
 	// response = append(response, cert...)
-	WriteHTTPPacket(OUT, 0x5, response)
-	ptype, body = ReadHTTPPacket(IN)
+	err = WriteHTTPPacket(OUT, 0x5, response)
+	if err != nil {
+		return err
+	}
+	ptype, body, err = ReadHTTPPacket(IN)
+	if err != nil {
+		return err
+	}
 
 	// TUNNEL AUTH RESPONSE
 	response = make([]byte, 0)
@@ -280,10 +276,19 @@ func handle(IN, OUT *net.TCPConn) error {
 	// // HTTP blob len
 	// response = append(response, 0)
 	// response = append(response, 0)
-	WriteHTTPPacket(OUT, 0x7, response)
+	err = WriteHTTPPacket(OUT, 0x7, response)
+	if err != nil {
+		return err
+	}
 
 	for {
-		ptype, body = ReadHTTPPacket(IN)
+		ptype, body, err = ReadHTTPPacket(IN)
+		if err != nil {
+			return err
+		}
+		if ptype != 0x8 {
+			return nil
+		}
 		server := make([]byte, 0)
 		for i := 8; i < len(body)-2; i += 2 {
 			server = append(server, body[i])
@@ -303,7 +308,7 @@ func handle(IN, OUT *net.TCPConn) error {
 		response = append(response, 0)
 		response = append(response, 0)
 		// fields present (2byte)
-		response = append(response, 1) // 1: channel id, 4: udp, 2: udp cookie
+		response = append(response, 7) // 1: channel id, 4: udp, 2: udp cookie
 		response = append(response, 0)
 		// reserved (2byte)
 		response = append(response, 0)
@@ -313,16 +318,22 @@ func handle(IN, OUT *net.TCPConn) error {
 		response = append(response, 0)
 		response = append(response, 0)
 		response = append(response, 0)
-		// // UDP port (2byte)
-		// response = append(response, 0x3f)
-		// response = append(response, 0x0d)
-		// // HTTP blob len (2byte)
-		// response = append(response, 1)
-		// response = append(response, 0)
-		// response = append(response, 1)
-		WriteHTTPPacket(OUT, 0x9, response)
+		// UDP port (2byte)
+		response = append(response, byte(0xff&(udpport>>0)))
+		response = append(response, byte(0xff&(udpport>>8)))
+		// HTTP blob len (2byte)
+		response = append(response, 20)
+		response = append(response, 0)
+		response = append(response, createRandom(20)...)
+		err = WriteHTTPPacket(OUT, 0x9, response)
+		if err != nil {
+			return err
+		}
 
-		rdp, _ := net.Dial("tcp4", string(server)+":"+strconv.Itoa(port))
+		rdp, err := net.Dial("tcp4", string(server)+":"+strconv.Itoa(port))
+		if err != nil {
+			return err
+		}
 		defer rdp.Close()
 
 		go func() {
@@ -359,20 +370,33 @@ func handle(IN, OUT *net.TCPConn) error {
 					packet = append(packet, 0xff&byte(realSize))
 					packet = append(packet, 0xff&byte(realSize>>8))
 					packet = append(packet, stuck[:realSize]...)
-					WriteHTTPPacket(OUT, 0x0a, packet)
+					err = WriteHTTPPacket(OUT, 0x0a, packet)
+					if err != nil {
+						log.Println(err)
+						return
+					}
 					stuck = stuck[realSize:]
 				}
 			}
 		}()
 
 		for {
-			ptype, body = ReadHTTPPacket(IN)
+			ptype, body, err := ReadHTTPPacket(IN)
+			if err != nil {
+				return err
+			}
 			if ptype == 10 {
 				size := (0xff & int(body[0])) | (0xff & int(body[1]) << 8)
-				rdp.Write(body[2:(size + 2)])
+				_, err = rdp.Write(body[2:(size + 2)])
+				if err != nil {
+					return err
+				}
 			} else if ptype == 16 {
 				rdp.Close()
-				WriteHTTPPacket(OUT, 0x11, []byte{0, 0, 0, 0})
+				err = WriteHTTPPacket(OUT, 0x11, []byte{0, 0, 0, 0})
+				if err != nil {
+					return err
+				}
 				break
 			}
 		}
@@ -382,11 +406,19 @@ func handle(IN, OUT *net.TCPConn) error {
 func pipe(conn *net.TCPConn) {
 	fmt.Println("Accepted.")
 	tcpAddr, _ := net.ResolveTCPAddr("tcp4", "winsvr2012-1:80")
-	rdg, _ := net.DialTCP("tcp4", nil, tcpAddr)
+	rdg, err := net.DialTCP("tcp4", nil, tcpAddr)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 	go func() {
 		buf := make([]byte, 2048)
 		for {
-			size, _ := rdg.Read(buf)
+			size, err := rdg.Read(buf)
+			if err != nil {
+				log.Println(err)
+				return
+			}
 			if size > 0 {
 				print(buf[:size])
 				conn.Write(buf[:size])
@@ -395,7 +427,11 @@ func pipe(conn *net.TCPConn) {
 	}()
 	buf := make([]byte, 2048)
 	for {
-		size, _ := conn.Read(buf)
+		size, err := conn.Read(buf)
+		if err != nil {
+			log.Println(err)
+			return
+		}
 		if size > 0 {
 			print(buf[:size])
 			rdg.Write(buf[:size])
@@ -407,6 +443,7 @@ func readCert() []byte {
 	f, err := os.Open("cert")
 	if err != nil {
 		fmt.Println("error")
+		return nil
 	}
 	defer f.Close()
 
@@ -425,34 +462,104 @@ func readCert() []byte {
 	return buf
 }
 
+func UDPHandler() {
+	fmt.Println("Server is Running at 0.0.0.0:" + strconv.Itoa(udpport))
+	udp, err := net.ListenPacket("udp4", "0.0.0.0:"+strconv.Itoa(udpport))
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer udp.Close()
+
+	buffer := make([]byte, 1600)
+	for {
+		// 通信読込 + 接続相手アドレス情報が受取
+		length, remoteAddr, _ := udp.ReadFrom(buffer)
+		fmt.Printf("Received from %v:\n", remoteAddr)
+		print(buffer[:length])
+		{
+			// conn, _ := net.Dial("udp4", "winsvr2016-3:3389")
+			// defer conn.Close()
+			// fmt.Println("サーバへメッセージを送信.")
+			// conn.Write(buffer[:length])
+
+			// fmt.Println("サーバからメッセージを受信。")
+			// buffer := make([]byte, 1600)
+			// length, _ := conn.Read(buffer)
+			// fmt.Printf("Receive: %s \n", string(buffer[:length]))
+		}
+		// conn.WriteTo([]byte("Hello, World !"), remoteAddr)
+	}
+}
+
+func RPC_IN_DATA(conn *net.TCPConn) bool {
+	fmt.Println("Accepted IN.")
+	if !authNtlm(conn, true) {
+		return false
+	}
+	fmt.Println("Start IN.")
+	return true
+}
+
+func RPC_OUT_DATA(conn *net.TCPConn) bool {
+	fmt.Println("Accepted OUT.")
+	if !authNtlm(conn, false) {
+		return false
+	}
+	fmt.Println("Start OUT.")
+	return true
+}
+
 func handleListener(l *net.TCPListener) error {
 	defer l.Close()
+
+	// go UDPHandler()
+
 	for {
 		var conn *net.TCPConn
 		conn, err := l.AcceptTCP()
 		if err != nil {
-			log.Println(err)
 			return err
 		}
-		go RPC_OUT_DATA(conn)
-		// go pipe(conn)
-
-		conn2, err := l.AcceptTCP()
-		if err != nil {
-			log.Println(err)
-			return err
+		line, _ := ReadLine(conn) // line is empty when error occured
+		fmt.Printf("%s\n", line)
+		if !strings.HasPrefix(line, "RDG_OUT_DATA ") {
+			continue
 		}
-		// pipe(conn2)
 
-		go func() {
-			RPC_IN_DATA(conn2)
-			handle(conn2, conn)
-		}()
+		for {
+			go RPC_OUT_DATA(conn)
+
+			conn2, err := l.AcceptTCP()
+			if err != nil {
+				return err
+			}
+			line, _ = ReadLine(conn2) // line is empty when error occured
+			fmt.Printf("%s\n", line)
+			if strings.HasPrefix(line, "RDG_OUT_DATA ") {
+				conn = conn2
+				continue
+			}
+			if !strings.HasPrefix(line, "RDG_IN_DATA ") {
+				break
+			}
+
+			go func() {
+				defer conn.Close()
+				defer conn2.Close()
+
+				success := RPC_IN_DATA(conn2)
+				if success {
+					handle(conn2, conn)
+				}
+			}()
+		}
 	}
 }
 
 var USERNAME string = ""
 var PASSWORD string = ""
+var udpport int = 3391
 
 func main() {
 	if len(os.Args) < 3 {
