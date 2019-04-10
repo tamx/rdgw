@@ -75,6 +75,16 @@ func ReadLine(conn *net.TCPConn) (string, error) {
 	}
 }
 
+func responseUnauth(conn *net.TCPConn, chaMsg string) {
+	conn.Write([]byte("HTTP/1.1 401 Unauthorized\r\n"))
+	conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
+	if chaMsg != "" {
+		conn.Write([]byte("WWW-Authenticate: Negotiate " + chaMsg + "\r\n"))
+	}
+	conn.Write([]byte("Content-Length: 0\r\n"))
+	conn.Write([]byte("\r\n"))
+}
+
 func authNtlm(conn *net.TCPConn, IN bool) bool {
 	phase := 3
 	session, _ := ntlm.CreateServerSession(ntlm.Version2, ntlm.ConnectionlessMode)
@@ -93,13 +103,19 @@ func authNtlm(conn *net.TCPConn, IN bool) bool {
 			if phase == 0 {
 				break
 			} else if phase == 1 {
-				auth = auth[strings.Index(auth, "Negotiate")+10:]
-				fmt.Println("Auth: " + auth)
+				if auth == "" {
+					responseUnauth(conn, "")
+					conn.Close()
+					return false
+				}
+				// fmt.Println("Auth: " + auth)
 				data, _ := base64.StdEncoding.DecodeString(auth)
 				am, _ := ntlm.ParseAuthenticateMessage(data, 2)
 				err := session.ProcessAuthenticateMessage(am)
 				if err != nil {
 					log.Println(err)
+					responseUnauth(conn, "")
+					conn.Close()
 					return false
 				}
 				conn.Write([]byte("HTTP/1.1 200 OK\r\n"))
@@ -112,21 +128,18 @@ func authNtlm(conn *net.TCPConn, IN bool) bool {
 					conn.Write([]byte{0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd})
 				}
 			} else if phase == 2 {
-				auth = auth[strings.Index(auth, "NTLM")+5:]
-				fmt.Println("Auth: " + auth)
 				session.ProcessNegotiateMessage(nil)
 				challenge, _ := session.GenerateChallengeMessage()
-				// fmt.Print("Challenge: " + challenge.String())
 				chaMsg := base64.StdEncoding.EncodeToString(challenge.Bytes())
-				fmt.Println("Challenge: " + chaMsg)
-				conn.Write([]byte("HTTP/1.1 401 Unauthorized\r\n"))
-				conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
-				conn.Write([]byte("WWW-Authenticate: Negotiate " + chaMsg + "\r\n"))
-				conn.Write([]byte("Content-Length: 0\r\n"))
-				conn.Write([]byte("\r\n"))
+				// fmt.Println("Challenge: " + chaMsg)
+				responseUnauth(conn, chaMsg)
 			}
 		} else if strings.HasPrefix(line, "Authorization:") {
-			auth = line
+			if strings.Index(line, "Negotiate") >= 0 {
+				auth = line[strings.Index(line, "Negotiate")+10:]
+				// } else if strings.Index(line, "NTLM") >= 0 {
+				// 	auth = line[strings.Index(line, "NTLM")+5:]
+			}
 		}
 	}
 	return true
