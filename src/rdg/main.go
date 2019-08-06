@@ -85,12 +85,34 @@ func responseUnauth(conn *net.TCPConn, chaMsg string) {
 	conn.Write([]byte("\r\n"))
 }
 
-func authNtlm(conn *net.TCPConn, IN bool) bool {
+func authNtlm2(conn *net.TCPConn, session2 ntlm.ServerSession, auth, ntlmHeader string) bool {
+	auth = auth[strings.Index(auth, ntlmHeader)+len(ntlmHeader)+1:]
+	// fmt.Println("Auth: " + auth)
+	data, _ := base64.StdEncoding.DecodeString(auth)
+	am, err := ntlm.ParseAuthenticateMessage(data, 2)
+	if err != nil {
+		log.Println(err)
+		session2.ProcessNegotiateMessage(nil)
+		challenge, _ := session2.GenerateChallengeMessage()
+		chaMsg := base64.StdEncoding.EncodeToString(challenge.Bytes())
+		// fmt.Println("Challenge: " + chaMsg)
+		responseUnauth(conn, ntlmHeader+" "+chaMsg)
+		return false
+	}
+	err = session2.ProcessAuthenticateMessage(am)
+	if err != nil {
+		log.Println(err)
+		responseUnauth(conn, "")
+		conn.Close()
+		return false
+	}
+	return true
+}
+
+func authNtlm(conn *net.TCPConn) bool {
 	websocket := false
 	session2, _ := ntlm.CreateServerSession(ntlm.Version2, ntlm.ConnectionlessMode)
 	session2.SetUserInfo(USERNAME, PASSWORD, "")
-	session1, _ := ntlm.CreateServerSession(ntlm.Version1, ntlm.ConnectionlessMode)
-	session1.SetUserInfo(USERNAME, PASSWORD, "")
 	auth := ""
 	for {
 		// fmt.Println("=>" + strconv.Itoa(phase))
@@ -105,88 +127,28 @@ func authNtlm(conn *net.TCPConn, IN bool) bool {
 		} else if strings.HasPrefix(line, "Upgrade:") {
 			websocket = true
 		} else if line == "" {
-			if strings.Index(auth, "Negotiate") >= 0 {
-				auth = auth[strings.Index(auth, "Negotiate")+10:]
-				// fmt.Println("Auth: " + auth)
-				data, _ := base64.StdEncoding.DecodeString(auth)
-				am, err := ntlm.ParseAuthenticateMessage(data, 2)
-				if err != nil {
-					log.Println(err)
-					session2.ProcessNegotiateMessage(nil)
-					challenge, _ := session2.GenerateChallengeMessage()
-					chaMsg := base64.StdEncoding.EncodeToString(challenge.Bytes())
-					// fmt.Println("Challenge: " + chaMsg)
-					responseUnauth(conn, "Negotiate "+chaMsg)
-					continue
+			if strings.Index(auth, "NTLM") >= 0 {
+				if authNtlm2(conn, session2, auth, "NTLM") {
+					break
 				}
-				err = session2.ProcessAuthenticateMessage(am)
-				if err != nil {
-					log.Println(err)
-					responseUnauth(conn, "")
-					return false
+			} else if strings.Index(auth, "Negotiate") >= 0 {
+				if authNtlm2(conn, session2, auth, "Negotiate") {
+					break
 				}
-				conn.Write([]byte("HTTP/1.1 200 OK\r\n"))
-				conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
-				if IN {
-					conn.Write([]byte("Content-Length: 0\r\n"))
-				}
-				conn.Write([]byte("\r\n"))
-				if websocket && !IN {
-					conn.Write([]byte{0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd})
-				}
-				break
-			} else if strings.Index(auth, "NTLM") >= 0 {
-				// nm := &ntlm.NegotiateMessage{}
-				// nm.Signature = []byte{0x4e, 0x54, 0x4c, 0x4d, 0x53, 0x53, 0x50, 0x00}
-				// nm.MessageType = 0x01000000
-				// nm.NegotiateFlags = 0x07320000
-				// nm.DomainNameFields, _ = ntlm.CreateStringPayload("DOMAIN")
-				// nm.WorkstationFields, _ = ntlm.CreateStringPayload("WORKSTATION")
-				// err := session1.ProcessNegotiateMessage(nm)
-				// if err != nil {
-				// 	log.Println(err)
-				// 	return false
-				// }
-				// challenge, err := session1.GenerateChallengeMessage()
-				// if err != nil {
-				// 	log.Println(err)
-				// 	return false
-				// }
-				// chaMsg := base64.StdEncoding.EncodeToString(challenge.Bytes())
-				// fmt.Println("Challenge: " + chaMsg)
-				auth = auth[strings.Index(auth, "NTLM")+5:]
-				fmt.Println("Auth: " + auth)
-				challengeMessage := "TlRMTVNTUAACAAAAAAAAADgAAABVgphiRy3oSZvn1I4AAAAAAAAAAKIAogA4AAAABQEoCgAAAA8CAA4AUgBFAFUAVABFAFIAUwABABwAVQBLAEIAUAAtAEMAQgBUAFIATQBGAEUAMAA2AAQAFgBSAGUAdQB0AGUAcgBzAC4AbgBlAHQAAwA0AHUAawBiAHAALQBjAGIAdAByAG0AZgBlADAANgAuAFIAZQB1AHQAZQByAHMALgBuAGUAdAAFABYAUgBlAHUAdABlAHIAcwAuAG4AZQB0AAAAAAA="
-				data, _ := base64.StdEncoding.DecodeString(auth)
-				am, err := ntlm.ParseAuthenticateMessage(data, 1)
-				if err != nil {
-					responseUnauth(conn, "NTLM "+challengeMessage)
-					continue
-				}
-
-				challengeData, _ := base64.StdEncoding.DecodeString(challengeMessage)
-				c, _ := ntlm.ParseChallengeMessage(challengeData)
-				session1.SetServerChallenge(c.ServerChallenge)
-
-				err = session1.ProcessAuthenticateMessage(am)
-				if err != nil {
-					log.Println(err)
-					responseUnauth(conn, "")
-					return false
-				}
-				conn.Write([]byte("HTTP/1.1 200 OK\r\n"))
-				conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
-				if IN {
-					conn.Write([]byte("Content-Length: 0\r\n"))
-				}
-				conn.Write([]byte("\r\n"))
-				if websocket && !IN {
-					conn.Write([]byte{0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd})
-				}
-				break
 			}
 		}
 	}
+
+	conn.Write([]byte("HTTP/1.1 200 OK\r\n"))
+	conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
+	if websocket {
+		conn.Write([]byte("\r\n"))
+		conn.Write([]byte{0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd})
+	} else {
+		conn.Write([]byte("Content-Length: 0\r\n"))
+		conn.Write([]byte("\r\n"))
+	}
+
 	for {
 		line, err := ReadLine(conn)
 		if err != nil {
@@ -563,7 +525,7 @@ func UDPHandler() {
 
 func RPC_IN_DATA(conn *net.TCPConn) bool {
 	fmt.Println("Accepted IN.")
-	if !authNtlm(conn, true) {
+	if !authNtlm(conn) {
 		return false
 	}
 	fmt.Println("Start IN.")
@@ -572,7 +534,7 @@ func RPC_IN_DATA(conn *net.TCPConn) bool {
 
 func RPC_OUT_DATA(conn *net.TCPConn) bool {
 	fmt.Println("Accepted OUT.")
-	if !authNtlm(conn, false) {
+	if !authNtlm(conn) {
 		return false
 	}
 	fmt.Println("Start OUT.")
