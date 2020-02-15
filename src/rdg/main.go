@@ -242,29 +242,18 @@ func handle(IN, OUT *net.TCPConn) error {
 	// TUNNEL RESPONSE
 	response = make([]byte, 0)
 	// server version
-	response = append(response, 0)
-	response = append(response, 0)
+	response = append(response, []byte{0, 0}...)
 	// status code
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
+	response = append(response, []byte{0, 0, 0, 0}...)
 	// fields present
-	response = append(response, 3) // 1: tunnel id, 2: caps, 4: nonce & server cert
-	response = append(response, 0)
+	// 1: tunnel id, 2: caps, 4: nonce & server cert
+	response = append(response, []byte{3, 0}...)
 	// reserved
-	response = append(response, 0)
-	response = append(response, 0)
+	response = append(response, []byte{0, 0}...)
 	// tunnel ID
-	response = append(response, 0x0a)
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
+	response = append(response, []byte{0x0a, 0, 0, 0}...)
 	// caps flag
-	response = append(response, 0x3f) // 0x3f
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
+	response = append(response, []byte{0x3f, 0, 0, 0}...)
 	// // nonce (20bytes)
 	// response = append(response, createRandom(16)...)
 	// // server cert
@@ -284,26 +273,15 @@ func handle(IN, OUT *net.TCPConn) error {
 	// TUNNEL AUTH RESPONSE
 	response = make([]byte, 0)
 	// error code (4byte)
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
+	response = append(response, []byte{0, 0, 0, 0}...)
 	// flag (2byte)
-	response = append(response, 3)
-	response = append(response, 0)
+	response = append(response, []byte{3, 0}...)
 	// reserved (2byte)
-	response = append(response, 0)
-	response = append(response, 0)
+	response = append(response, []byte{0, 0}...)
 	// redir flag (2byte)
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0x80)
+	response = append(response, []byte{0, 0, 0, 0x80}...)
 	// idle timeout (4byte)
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
+	response = append(response, []byte{0, 0, 0, 0}...)
 	// // HTTP blob len
 	// response = append(response, 0)
 	// response = append(response, 0)
@@ -312,126 +290,117 @@ func handle(IN, OUT *net.TCPConn) error {
 		return err
 	}
 
-	for {
-		ptype, body, err = ReadHTTPPacket(IN)
-		if err != nil {
-			return err
-		}
-		if ptype != 0x8 {
-			return nil
-		}
-		server := make([]byte, 0)
-		for i := 8; i < len(body)-2; i += 2 {
-			server = append(server, body[i])
-		}
-		port := (0xff & int(body[2]))
-		port |= (0xff & int(body[3])) << 8
-		fmt.Println(string(server) + ":" + strconv.Itoa(port))
-		if port != 3389 {
-			return nil
-		}
+	ptype, body, err = ReadHTTPPacket(IN)
+	if err != nil {
+		return err
+	}
+	if ptype != 0x8 {
+		return nil
+	}
+	server := make([]byte, 0)
+	for i := 8; i < len(body)-2; i += 2 {
+		server = append(server, body[i])
+	}
+	port := (0xff & int(body[2]))
+	port |= (0xff & int(body[3])) << 8
+	fmt.Println(string(server) + ":" + strconv.Itoa(port))
+	if port != 3389 {
+		return nil
+	}
 
-		// HTTP CHANNEL RESPONSE
-		response = make([]byte, 0)
-		// error code (4byte)
-		response = append(response, 0)
-		response = append(response, 0)
-		response = append(response, 0)
-		response = append(response, 0)
-		// fields present (2byte)
-		response = append(response, 7) // 1: channel id, 4: udp, 2: udp cookie
-		response = append(response, 0)
-		// reserved (2byte)
-		response = append(response, 0)
-		response = append(response, 0)
-		// channel id (4byte)
-		response = append(response, 1)
-		response = append(response, 0)
-		response = append(response, 0)
-		response = append(response, 0)
-		// UDP port (2byte)
-		response = append(response, byte(0xff&(udpport>>0)))
-		response = append(response, byte(0xff&(udpport>>8)))
-		// HTTP blob len (2byte)
-		response = append(response, 20)
-		response = append(response, 0)
-		response = append(response, createRandom(20)...)
-		err = WriteHTTPPacket(OUT, 0x9, response)
-		if err != nil {
-			return err
-		}
+	// HTTP CHANNEL RESPONSE
+	response = make([]byte, 0)
+	// error code (4byte)
+	response = append(response, []byte{0, 0, 0, 0}...)
+	// fields present (2byte)
+	// 1: channel id, 4: udp, 2: udp cookie
+	response = append(response, []byte{7, 0}...)
+	// reserved (2byte)
+	response = append(response, []byte{0, 0}...)
+	// channel id (4byte)
+	response = append(response, []byte{1, 0, 0, 0}...)
+	// UDP port (2byte)
+	response = append(response, byte(0xff&(udpport>>0)))
+	response = append(response, byte(0xff&(udpport>>8)))
+	// HTTP blob len (2byte)
+	response = append(response, []byte{20, 0}...)
+	response = append(response, createRandom(20)...)
+	err = WriteHTTPPacket(OUT, 0x9, response)
+	if err != nil {
+		return err
+	}
 
-		rdp, err := net.Dial("tcp4", string(server)+":"+strconv.Itoa(port))
-		if err != nil {
-			return err
-		}
-		defer rdp.Close()
+	rdp, err := net.Dial("tcp4", string(server)+":"+strconv.Itoa(port))
+	if err != nil {
+		return err
+	}
+	defer rdp.Close()
 
-		go func() {
-			stuck := make([]byte, 0)
-			buf := make([]byte, 0xffff)
+	go func() {
+		stuck := make([]byte, 0)
+		buf := make([]byte, 0xffff)
+		for {
+			size, err := rdp.Read(buf)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			stuck = append(stuck, buf[:size]...)
+			// fmt.Printf("Len: %d\n", size)
 			for {
-				size, err := rdp.Read(buf)
+				if len(stuck) <= 3 {
+					break
+				}
+				// print(stuck[:5])
+				realSize := (0xff & int(stuck[3])) | (0xff & int(stuck[2]) << 8)
+				realSize &= 0x3fff
+				if 0x80&stuck[1] != 0 {
+					realSize = (0xff & int(stuck[2])) | (0x7f & int(stuck[1]) << 8)
+				}
+				if stuck[1] == 0x03 && stuck[2] == 0x03 {
+					realSize = (0xff & int(stuck[4])) | (0xff & int(stuck[3]) << 8)
+					realSize += 5
+				}
+				// fmt.Printf("Size: %04x %d %d %04x\n", realSize, realSize, len(stuck), len(stuck))
+				if len(stuck) < realSize {
+					break
+				}
+				// fmt.Printf("Size: %04x\n", realSize)
+				packet := make([]byte, 0)
+				packet = append(packet, 0xff&byte(realSize))
+				packet = append(packet, 0xff&byte(realSize>>8))
+				packet = append(packet, stuck[:realSize]...)
+				err = WriteHTTPPacket(OUT, 0x0a, packet)
 				if err != nil {
 					log.Println(err)
 					return
 				}
-				stuck = append(stuck, buf[:size]...)
-				// fmt.Printf("Len: %d\n", size)
-				for {
-					if len(stuck) <= 3 {
-						break
-					}
-					// print(stuck[:5])
-					realSize := (0xff & int(stuck[3])) | (0xff & int(stuck[2]) << 8)
-					realSize &= 0x3fff
-					if 0x80&stuck[1] != 0 {
-						realSize = (0xff & int(stuck[2])) | (0x7f & int(stuck[1]) << 8)
-					}
-					if stuck[1] == 0x03 && stuck[2] == 0x03 {
-						realSize = (0xff & int(stuck[4])) | (0xff & int(stuck[3]) << 8)
-						realSize += 5
-					}
-					// fmt.Printf("Size: %04x %d %d %04x\n", realSize, realSize, len(stuck), len(stuck))
-					if len(stuck) < realSize {
-						break
-					}
-					// fmt.Printf("Size: %04x\n", realSize)
-					packet := make([]byte, 0)
-					packet = append(packet, 0xff&byte(realSize))
-					packet = append(packet, 0xff&byte(realSize>>8))
-					packet = append(packet, stuck[:realSize]...)
-					err = WriteHTTPPacket(OUT, 0x0a, packet)
-					if err != nil {
-						log.Println(err)
-						return
-					}
-					stuck = stuck[realSize:]
-				}
+				stuck = stuck[realSize:]
 			}
-		}()
+		}
+	}()
 
-		for {
-			ptype, body, err := ReadHTTPPacket(IN)
+	for {
+		ptype, body, err := ReadHTTPPacket(IN)
+		if err != nil {
+			return err
+		}
+		if ptype == 10 {
+			size := (0xff & int(body[0])) | (0xff & int(body[1]) << 8)
+			_, err = rdp.Write(body[2:(size + 2)])
 			if err != nil {
 				return err
 			}
-			if ptype == 10 {
-				size := (0xff & int(body[0])) | (0xff & int(body[1]) << 8)
-				_, err = rdp.Write(body[2:(size + 2)])
-				if err != nil {
-					return err
-				}
-			} else if ptype == 16 {
-				rdp.Close()
-				err = WriteHTTPPacket(OUT, 0x11, []byte{0, 0, 0, 0})
-				if err != nil {
-					return err
-				}
-				break
+		} else if ptype == 16 {
+			rdp.Close()
+			err = WriteHTTPPacket(OUT, 0x11, []byte{0, 0, 0, 0})
+			if err != nil {
+				return err
 			}
+			break
 		}
 	}
+	return nil
 }
 
 func pipe(conn *net.TCPConn) {
@@ -508,7 +477,7 @@ func UDPHandler() {
 		length, remoteAddr, _ := udp.ReadFrom(buffer)
 		fmt.Printf("Received from %v:\n", remoteAddr)
 		print(buffer[:length])
-		{
+		if false {
 			// conn, _ := net.Dial("udp4", "winsvr2016-3:3389")
 			// defer conn.Close()
 			// fmt.Println("サーバへメッセージを送信.")
