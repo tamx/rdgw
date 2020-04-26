@@ -91,7 +91,6 @@ func authNtlm2(conn *net.TCPConn, session2 ntlm.ServerSession, auth, ntlmHeader 
 	// fmt.Println("Auth: " + auth)
 	data, _ := base64.StdEncoding.DecodeString(auth)
 	am, err := ntlm.ParseAuthenticateMessage(data, 2)
-	fmt.Println("User: " + am.UserName.String())
 	if err != nil {
 		log.Println(err)
 		session2.ProcessNegotiateMessage(nil)
@@ -101,6 +100,14 @@ func authNtlm2(conn *net.TCPConn, session2 ntlm.ServerSession, auth, ntlmHeader 
 		responseUnauth(conn, ntlmHeader+" "+chaMsg)
 		return false
 	}
+	username := am.UserName.String()
+	fmt.Println("User: " + username)
+	if username != USERNAME {
+		responseUnauth(conn, "")
+		conn.Close()
+		return false
+	}
+	session2.SetUserInfo(username, PASSWORD, "")
 	err = session2.ProcessAuthenticateMessage(am)
 	if err != nil {
 		log.Println(err)
@@ -114,7 +121,6 @@ func authNtlm2(conn *net.TCPConn, session2 ntlm.ServerSession, auth, ntlmHeader 
 func authNtlm(conn *net.TCPConn) bool {
 	websocket := false
 	session2, _ := ntlm.CreateServerSession(ntlm.Version2, ntlm.ConnectionlessMode)
-	session2.SetUserInfo(USERNAME, PASSWORD, "")
 	auth := ""
 	for {
 		// fmt.Println("=>" + strconv.Itoa(phase))
