@@ -91,6 +91,7 @@ func authNtlm2(conn *net.TCPConn, session2 ntlm.ServerSession, auth, ntlmHeader 
 	// fmt.Println("Auth: " + auth)
 	data, _ := base64.StdEncoding.DecodeString(auth)
 	am, err := ntlm.ParseAuthenticateMessage(data, 2)
+	fmt.Println("User: " + am.UserName.String())
 	if err != nil {
 		log.Println(err)
 		session2.ProcessNegotiateMessage(nil)
@@ -569,7 +570,7 @@ var udpport int = 3391
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Println("usage: rdg [user] [pass]")
+		fmt.Println("usage: rdgw [user] [pass]")
 		return
 	}
 	USERNAME = os.Args[1]
