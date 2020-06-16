@@ -118,7 +118,7 @@ func authNtlm2(conn *net.TCPConn, session2 ntlm.ServerSession, auth, ntlmHeader 
 	return true
 }
 
-func authNtlm(conn *net.TCPConn) bool {
+func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 	websocket := false
 	session2, _ := ntlm.CreateServerSession(ntlm.Version2, ntlm.ConnectionlessMode)
 	auth := ""
@@ -135,7 +135,9 @@ func authNtlm(conn *net.TCPConn) bool {
 		} else if strings.HasPrefix(line, "Upgrade:") {
 			websocket = true
 		} else if line == "" {
-			if strings.Index(auth, "NTLM") >= 0 {
+			if auth == "" {
+				responseUnauth(conn, "")
+			} else if strings.Index(auth, "NTLM") >= 0 {
 				if authNtlm2(conn, session2, auth, "NTLM") {
 					break
 				}
@@ -151,10 +153,12 @@ func authNtlm(conn *net.TCPConn) bool {
 	conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
 	if websocket {
 		conn.Write([]byte("\r\n"))
-		conn.Write([]byte{0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd})
 	} else {
 		conn.Write([]byte("Content-Length: 0\r\n"))
 		conn.Write([]byte("\r\n"))
+	}
+	if rdgOut {
+		conn.Write([]byte{0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd})
 	}
 
 	for {
@@ -507,7 +511,7 @@ func UDPHandler() {
 
 func RPC_IN_DATA(conn *net.TCPConn) bool {
 	fmt.Println("Accepted IN.")
-	if !authNtlm(conn) {
+	if !authNtlm(conn, false) {
 		return false
 	}
 	fmt.Println("Start IN.")
@@ -516,7 +520,7 @@ func RPC_IN_DATA(conn *net.TCPConn) bool {
 
 func RPC_OUT_DATA(conn *net.TCPConn) bool {
 	fmt.Println("Accepted OUT.")
-	if !authNtlm(conn) {
+	if !authNtlm(conn, true) {
 		return false
 	}
 	fmt.Println("Start OUT.")
@@ -528,42 +532,28 @@ func handleListener(l *net.TCPListener) error {
 
 	// go UDPHandler()
 
+	var out *net.TCPConn
 	for {
-		var conn *net.TCPConn
 		conn, err := l.AcceptTCP()
 		if err != nil {
 			return err
 		}
 		line, _ := ReadLine(conn) // line is empty when error occured
 		fmt.Printf("%s\n", line)
-		if !strings.HasPrefix(line, "RDG_OUT_DATA ") {
+		if strings.HasPrefix(line, "RDG_OUT_DATA ") {
+			out = conn
+			go RPC_OUT_DATA(out)
 			continue
 		}
-
-		for {
-			go RPC_OUT_DATA(conn)
-
-			conn2, err := l.AcceptTCP()
-			if err != nil {
-				return err
-			}
-			line, _ = ReadLine(conn2) // line is empty when error occured
-			fmt.Printf("%s\n", line)
-			if strings.HasPrefix(line, "RDG_OUT_DATA ") {
-				conn = conn2
-				continue
-			}
-			if !strings.HasPrefix(line, "RDG_IN_DATA ") {
-				break
-			}
-
+		if strings.HasPrefix(line, "RDG_IN_DATA ") && out != nil {
+			in := conn
 			go func() {
-				defer conn.Close()
-				defer conn2.Close()
+				defer in.Close()
+				defer out.Close()
 
-				success := RPC_IN_DATA(conn2)
+				success := RPC_IN_DATA(in)
 				if success {
-					handle(conn2, conn)
+					handle(in, out)
 				}
 			}()
 		}
