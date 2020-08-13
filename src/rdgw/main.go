@@ -13,8 +13,17 @@ import (
 	"strings"
 	"time"
 
+	// "github.com/ssgelm/golang-github-thomsonreuterseikon-go-ntlm/ntlm"
 	"github.com/ThomsonReutersEikon/go-ntlm/ntlm"
+	digest "github.com/tamx/golang-digest"
 )
+
+func checkHandler(username string) string {
+	if username != USERNAME {
+		return ""
+	}
+	return PASSWORD
+}
 
 func print(bs []byte) {
 	count := 0
@@ -53,6 +62,7 @@ func createRandom(size int) []byte {
 	return buf
 }
 
+// ReadLine ...
 func ReadLine(conn *net.TCPConn) (string, error) {
 	buf := make([]byte, 1)
 	line := make([]byte, 0)
@@ -82,6 +92,9 @@ func responseUnauth(conn *net.TCPConn, chaMsg string) {
 	if chaMsg != "" {
 		conn.Write([]byte("WWW-Authenticate: " + chaMsg + "\r\n"))
 	}
+	conn.Write([]byte("WWW-Authenticate: " +
+		"Digest realm=\"secret\", nonce=\"12345678901234567890123456789012\", algorithm=MD5, qop=auth\r\n"))
+	conn.Write([]byte("WWW-Authenticate: Basic realm=\"SECRET AREA\"\r\n"))
 	conn.Write([]byte("Content-Length: 0\r\n"))
 	conn.Write([]byte("\r\n"))
 }
@@ -102,12 +115,8 @@ func authNtlm2(conn *net.TCPConn, session2 ntlm.ServerSession, auth, ntlmHeader 
 	}
 	username := am.UserName.String()
 	fmt.Println("User: " + username)
-	if username != USERNAME {
-		responseUnauth(conn, "")
-		conn.Close()
-		return false
-	}
-	session2.SetUserInfo(username, PASSWORD, "")
+	password := checkHandler(username)
+	session2.SetUserInfo(username, password, "")
 	err = session2.ProcessAuthenticateMessage(am)
 	if err != nil {
 		log.Println(err)
@@ -122,6 +131,7 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 	websocket := false
 	session2, _ := ntlm.CreateServerSession(ntlm.Version2, ntlm.ConnectionlessMode)
 	auth := ""
+	head, _ := ReadLine(conn)
 	for {
 		// fmt.Println("=>" + strconv.Itoa(phase))
 		line, err := ReadLine(conn)
@@ -130,13 +140,12 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 			return false
 		}
 		fmt.Printf("%s\n", line)
-		if strings.HasPrefix(line, "Authorization:") {
+		if strings.HasPrefix(strings.ToLower(line), "authorization:") {
 			auth = line
-		} else if strings.HasPrefix(line, "Upgrade:") {
+		} else if strings.HasPrefix(strings.ToLower(line), "upgrade:") {
 			websocket = true
 		} else if line == "" {
 			if auth == "" {
-				responseUnauth(conn, "")
 			} else if strings.Index(auth, "NTLM") >= 0 {
 				if authNtlm2(conn, session2, auth, "NTLM") {
 					break
@@ -145,7 +154,26 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 				if authNtlm2(conn, session2, auth, "Negotiate") {
 					break
 				}
+			} else if strings.Index(auth, "Digest") >= 0 {
+				index := strings.Index(auth, "Digest ")
+				auth = auth[index:]
+				index = strings.Index(head, " ")
+				method := head[:index]
+				if digest.CheckAuth(auth, method, checkHandler) {
+					break
+				}
+			} else if strings.Index(auth, "Basic") >= 0 {
+				index := strings.Index(auth, "Basic ")
+				auth = auth[index:]
+				auth = auth[6:]
+				checkStr := USERNAME + ":" + checkHandler(USERNAME)
+				checkByte := []byte(checkStr)
+				digest := base64.StdEncoding.EncodeToString(checkByte)
+				if auth == digest {
+					break
+				}
 			}
+			responseUnauth(conn, "")
 		}
 	}
 
@@ -175,6 +203,7 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 	return true
 }
 
+// ReadHTTPPacket ...
 func ReadHTTPPacket(IN *net.TCPConn) (byte, []byte, error) {
 	ReadLine(IN) // skip until "\r\n"
 	buf := make([]byte, 1)
@@ -205,6 +234,7 @@ func ReadHTTPPacket(IN *net.TCPConn) (byte, []byte, error) {
 	return packettype, body, err
 }
 
+// WriteHTTPPacket ...
 func WriteHTTPPacket(OUT *net.TCPConn, packettype int, body []byte) error {
 	packet := make([]byte, 0)
 	packet = append(packet, byte(packettype))
@@ -365,7 +395,7 @@ func handle(IN, OUT *net.TCPConn) error {
 				stuck = append(stuck, buf[:size]...)
 				// fmt.Printf("Len: %d\n", size)
 				for {
-					if len(stuck) <= 3 {
+					if len(stuck) < 5 {
 						break
 					}
 					// print(stuck[:5])
@@ -479,6 +509,7 @@ func readCert() []byte {
 	return buf
 }
 
+// UDPHandler ...
 func UDPHandler() {
 	fmt.Println("Server is Running at 0.0.0.0:" + strconv.Itoa(udpport))
 	udp, err := net.ListenPacket("udp4", "0.0.0.0:"+strconv.Itoa(udpport))
@@ -509,7 +540,8 @@ func UDPHandler() {
 	}
 }
 
-func RPC_IN_DATA(conn *net.TCPConn) bool {
+// RDG_IN_DATA ...
+func RDG_IN_DATA(conn *net.TCPConn) bool {
 	fmt.Println("Accepted IN.")
 	if !authNtlm(conn, false) {
 		return false
@@ -518,7 +550,8 @@ func RPC_IN_DATA(conn *net.TCPConn) bool {
 	return true
 }
 
-func RPC_OUT_DATA(conn *net.TCPConn) bool {
+// RDG_OUT_DATA ...
+func RDG_OUT_DATA(conn *net.TCPConn) bool {
 	fmt.Println("Accepted OUT.")
 	if !authNtlm(conn, true) {
 		return false
@@ -542,7 +575,7 @@ func handleListener(l *net.TCPListener) error {
 		fmt.Printf("%s\n", line)
 		if strings.HasPrefix(line, "RDG_OUT_DATA ") {
 			out = conn
-			go RPC_OUT_DATA(out)
+			go RDG_OUT_DATA(out)
 			continue
 		}
 		if strings.HasPrefix(line, "RDG_IN_DATA ") && out != nil {
@@ -551,7 +584,7 @@ func handleListener(l *net.TCPListener) error {
 				defer in.Close()
 				defer out.Close()
 
-				success := RPC_IN_DATA(in)
+				success := RDG_IN_DATA(in)
 				if success {
 					handle(in, out)
 				}
