@@ -150,10 +150,12 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 				if authNtlm2(conn, session2, auth, "NTLM") {
 					break
 				}
+				continue
 			} else if strings.Index(auth, "Negotiate") >= 0 {
 				if authNtlm2(conn, session2, auth, "Negotiate") {
 					break
 				}
+				continue
 			} else if strings.Index(auth, "Digest") >= 0 {
 				index := strings.Index(auth, "Digest ")
 				auth = auth[index:]
