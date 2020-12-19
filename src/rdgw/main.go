@@ -18,11 +18,16 @@ import (
 	digest "github.com/tamx/golang-digest"
 )
 
+var (
+	usermap = map[string]string{}
+)
+
 func checkHandler(username string) string {
-	if username != USERNAME {
+	pass, ok := usermap[username]
+	if !ok {
 		return ""
 	}
-	return PASSWORD
+	return pass
 }
 
 func print(bs []byte) {
@@ -168,10 +173,11 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 				index := strings.Index(auth, "Basic ")
 				auth = auth[index:]
 				auth = auth[6:]
-				checkStr := USERNAME + ":" + checkHandler(USERNAME)
-				checkByte := []byte(checkStr)
-				digest := base64.StdEncoding.EncodeToString(checkByte)
-				if auth == digest {
+				checkByte, _ := base64.StdEncoding.DecodeString(auth)
+				checkStr := string(checkByte)
+				username := checkStr[:strings.IndexRune(checkStr, ':')]
+				password := checkStr[strings.IndexRune(checkStr, ':')+1:]
+				if password == checkHandler(username) {
 					break
 				}
 			}
@@ -542,8 +548,7 @@ func UDPHandler() {
 	}
 }
 
-// RDG_IN_DATA ...
-func RDG_IN_DATA(conn *net.TCPConn) bool {
+func rdgInData(conn *net.TCPConn) bool {
 	fmt.Println("Accepted IN.")
 	if !authNtlm(conn, false) {
 		return false
@@ -552,8 +557,7 @@ func RDG_IN_DATA(conn *net.TCPConn) bool {
 	return true
 }
 
-// RDG_OUT_DATA ...
-func RDG_OUT_DATA(conn *net.TCPConn) bool {
+func rdgOutData(conn *net.TCPConn) bool {
 	fmt.Println("Accepted OUT.")
 	if !authNtlm(conn, true) {
 		return false
@@ -577,7 +581,7 @@ func handleListener(l *net.TCPListener) error {
 		fmt.Printf("%s\n", line)
 		if strings.HasPrefix(line, "RDG_OUT_DATA ") {
 			out = conn
-			go RDG_OUT_DATA(out)
+			go rdgOutData(out)
 			continue
 		}
 		if strings.HasPrefix(line, "RDG_IN_DATA ") && out != nil {
@@ -586,7 +590,7 @@ func handleListener(l *net.TCPListener) error {
 				defer in.Close()
 				defer out.Close()
 
-				success := RDG_IN_DATA(in)
+				success := rdgInData(in)
 				if success {
 					handle(in, out)
 				}
@@ -595,17 +599,24 @@ func handleListener(l *net.TCPListener) error {
 	}
 }
 
-var USERNAME string = ""
-var PASSWORD string = ""
 var udpport int = 3391
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Println("usage: rdgw [user] [pass]")
+	if len(os.Args) < 2 {
+		fmt.Println("usage: rdgw [user:pass]...")
 		return
 	}
-	USERNAME = os.Args[1]
-	PASSWORD = os.Args[2]
+	for i := 1; i < len(os.Args); i++ {
+		param := os.Args[i]
+		index := strings.IndexRune(param, ':')
+		if index < 0 {
+			fmt.Printf("Error user and pass arguments. : %s\n", param)
+			return
+		}
+		user := param[:index]
+		pass := param[index+1:]
+		usermap[user] = pass
+	}
 
 	tcpAddr, err := net.ResolveTCPAddr("tcp", "0.0.0.0:13389")
 	if err != nil {
