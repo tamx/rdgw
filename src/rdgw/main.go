@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -13,9 +14,10 @@ import (
 	"strings"
 	"time"
 
-	// "github.com/ssgelm/golang-github-thomsonreuterseikon-go-ntlm/ntlm"
-	"github.com/ThomsonReutersEikon/go-ntlm/ntlm"
 	digest "github.com/tamx/golang-digest"
+
+	// "github.com/ThomsonReutersEikon/go-ntlm/ntlm"
+	"github.com/tamx/golang-github-thomsonreuterseikon-go-ntlm/ntlm"
 )
 
 var (
@@ -68,7 +70,7 @@ func createRandom(size int) []byte {
 }
 
 // ReadLine ...
-func ReadLine(conn *net.TCPConn) (string, error) {
+func ReadLine(conn io.ReadCloser) (string, error) {
 	buf := make([]byte, 1)
 	line := make([]byte, 0)
 	var old byte
@@ -136,10 +138,12 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 	websocket := false
 	session2, _ := ntlm.CreateServerSession(ntlm.Version2, ntlm.ConnectionlessMode)
 	auth := ""
+	header := ""
 	head, _ := ReadLine(conn)
 	for {
 		// fmt.Println("=>" + strconv.Itoa(phase))
 		line, err := ReadLine(conn)
+		header += line + "\r\n"
 		if err != nil {
 			log.Println(err)
 			return false
@@ -185,14 +189,16 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 		}
 	}
 
+	if websocket {
+		sock := newWebSock(conn, header)
+		go handle(sock, sock)
+		return true
+	}
+
 	conn.Write([]byte("HTTP/1.1 200 OK\r\n"))
 	conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
-	if websocket {
-		conn.Write([]byte("\r\n"))
-	} else {
-		conn.Write([]byte("Content-Length: 0\r\n"))
-		conn.Write([]byte("\r\n"))
-	}
+	conn.Write([]byte("Content-Length: 0\r\n"))
+	conn.Write([]byte("\r\n"))
 	if rdgOut {
 		conn.Write([]byte{0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd})
 	}
@@ -212,7 +218,7 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 }
 
 // ReadHTTPPacket ...
-func ReadHTTPPacket(IN *net.TCPConn) (byte, []byte, error) {
+func ReadHTTPPacket(IN io.ReadCloser) (byte, []byte, error) {
 	ReadLine(IN) // skip until "\r\n"
 	buf := make([]byte, 1)
 	// packet type
@@ -237,13 +243,15 @@ func ReadHTTPPacket(IN *net.TCPConn) (byte, []byte, error) {
 		body = append(body, buf[0])
 	}
 	// print(body)
+
 	IN.Read(buf)           // 0x0d
 	_, err := IN.Read(buf) // 0x0a
 	return packettype, body, err
+	// return packettype, body, nil
 }
 
 // WriteHTTPPacket ...
-func WriteHTTPPacket(OUT *net.TCPConn, packettype int, body []byte) error {
+func WriteHTTPPacket(OUT io.WriteCloser, packettype int, body []byte) error {
 	packet := make([]byte, 0)
 	packet = append(packet, byte(packettype))
 	packet = append(packet, 0)
@@ -261,29 +269,33 @@ func WriteHTTPPacket(OUT *net.TCPConn, packettype int, body []byte) error {
 	return err
 }
 
-func handle(IN, OUT *net.TCPConn) error {
+func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 	defer IN.Close()
 	defer OUT.Close()
 
+	// HTTP HANDSHAKE REQUEST
 	ptype, body, err := ReadHTTPPacket(IN)
 	if err != nil {
 		return err
 	}
+
+	// HTTP HANDSHAKE RESPONSE
 	response := make([]byte, 0)
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
+	// error code
+	response = append(response, []byte{0, 0, 0, 0}...)
+	// major version
 	response = append(response, 1)
+	// minor version
 	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
-	response = append(response, 0)
+	// server version
+	response = append(response, []byte{0, 0}...)
+	// ExtendedAuth
+	response = append(response, []byte{0, 0}...)
 	err = WriteHTTPPacket(OUT, 0x2, response)
 	if err != nil {
 		return err
 	}
+	// TUNNEL CREATE
 	ptype, body, err = ReadHTTPPacket(IN)
 	if err != nil {
 		return err
@@ -315,6 +327,7 @@ func handle(IN, OUT *net.TCPConn) error {
 	if err != nil {
 		return err
 	}
+	// TUNNEL AUTH
 	ptype, body, err = ReadHTTPPacket(IN)
 	if err != nil {
 		return err
@@ -325,16 +338,16 @@ func handle(IN, OUT *net.TCPConn) error {
 	// error code (4byte)
 	response = append(response, []byte{0, 0, 0, 0}...)
 	// flag (2byte)
-	response = append(response, []byte{3, 0}...)
+	response = append(response, []byte{0x07, 0}...)
 	// reserved (2byte)
 	response = append(response, []byte{0, 0}...)
 	// redir flag (2byte)
 	response = append(response, []byte{0, 0, 0, 0x80}...)
 	// idle timeout (4byte)
 	response = append(response, []byte{0, 0, 0, 0}...)
-	// // HTTP blob len
-	// response = append(response, 0)
-	// response = append(response, 0)
+	// HTTP blob len
+	response = append(response, 0)
+	response = append(response, 0)
 	err = WriteHTTPPacket(OUT, 0x7, response)
 	if err != nil {
 		return err
