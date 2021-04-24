@@ -138,7 +138,7 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 	websocket := false
 	session2, _ := ntlm.CreateServerSession(ntlm.Version2, ntlm.ConnectionlessMode)
 	auth := ""
-	header := ""
+	header := "RDG_OUT_DATA /remoteDesktopGateway/ HTTP/1.1\r\n"
 	head, _ := ReadLine(conn)
 	for {
 		// fmt.Println("=>" + strconv.Itoa(phase))
@@ -588,6 +588,10 @@ func handleListener(l *net.TCPListener) error {
 		}
 		line, _ := ReadLine(conn) // line is empty when error occured
 		fmt.Printf("%s\n", line)
+		if strings.HasPrefix(line, "POST /KdcProxy ") {
+			conn.Close()
+			continue
+		}
 		if strings.HasPrefix(line, "RDG_OUT_DATA ") {
 			out = conn
 			go rdgOutData(out)
