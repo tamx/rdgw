@@ -2,51 +2,51 @@ package main
 
 import (
 	"net"
+	"strconv"
 )
 
 type httpsock struct {
-	IN  *net.TCPConn
-	OUT *net.TCPConn
+	IN     *net.TCPConn
+	OUT    *net.TCPConn
+	Buffer []byte
 }
 
-func newHttpSock(conn *net.TCPConn) *websock {
-	sock := websock{
-		Conn: conn,
+func newHttpSock(conn *net.TCPConn) *httpsock {
+	sock := httpsock{
+		IN: conn,
 	}
 	return &sock
 }
 
 func (sock *httpsock) Read(p []byte) (int, error) {
-	ReadLine(sock.IN) // skip until "\r\n"
-	// // ReadLine(IN) // skip until "\r\n"
-	// buf := make([]byte, 1)
-	// // packet type
-	// IN.Read(buf)
-	// packettype := buf[0]
-	// IN.Read(buf)
-	// IN.Read(buf)
-	// IN.Read(buf)
-	// // packet length
-	// IN.Read(buf)
-	// length := int(buf[0])
-	// IN.Read(buf)
-	// length |= (int(buf[0]) << 8)
-	// IN.Read(buf)
-	// length |= (int(buf[0]) << 16)
-	// IN.Read(buf)
-	// length |= (int(buf[0]) << 24)
-	// // fmt.Printf("=>Type: %d, len: %d\n", packettype, length)
-	// body := make([]byte, 0)
-	// for i := 8; i < length; i++ {
-	// 	IN.Read(buf)
-	// 	body = append(body, buf[0])
-	// }
-	// print(body)
+	data := sock.Buffer
+	if data == nil {
+		line, _ := ReadLine(sock.IN) // skip until "\r\n"
+		// fmt.Println(line)
+		length, _ := strconv.ParseInt(line, 16, 32)
+		buffer := make([]byte, length)
+		n, _ := sock.IN.Read(buffer)
+		data = buffer[:n]
 
-	// IN.Read(buf)           // 0x0d
-	// _, err := IN.Read(buf) // 0x0a
-	// return packettype, body, err
-	return 0, nil
+		buf := make([]byte, 1)
+		sock.IN.Read(buf)           // 0x0d
+		_, err := sock.IN.Read(buf) // 0x0a
+		if err != nil {
+			return 0, err
+		}
+	}
+	if len(data) <= len(p) {
+		for i := 0; i < len(data); i++ {
+			p[i] = data[i]
+		}
+		sock.Buffer = nil
+		return len(data), nil
+	}
+	for i := 0; i < len(p); i++ {
+		p[i] = data[i]
+	}
+	sock.Buffer = data[len(p):]
+	return len(p), nil
 }
 
 func (sock *httpsock) Write(b []byte) (int, error) {

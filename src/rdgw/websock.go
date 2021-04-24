@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -81,8 +80,8 @@ func (sock *websock) Read(p []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		fmt.Println("Read:")
-		print(data)
+		// fmt.Println("Read:")
+		// print(data)
 	}
 	if len(data) <= len(p) {
 		for i := 0; i < len(data); i++ {
@@ -99,8 +98,8 @@ func (sock *websock) Read(p []byte) (int, error) {
 }
 
 func (sock *websock) Write(b []byte) (int, error) {
-	fmt.Println("Write:")
-	print(b)
+	// fmt.Println("Write:")
+	// print(b)
 	if err := wsutil.WriteServerBinary(sock.Conn, b); err != nil {
 		return 0, err
 	}

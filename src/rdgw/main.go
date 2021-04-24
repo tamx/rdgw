@@ -219,7 +219,6 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 
 // ReadHTTPPacket ...
 func ReadHTTPPacket(IN io.ReadCloser) (byte, []byte, error) {
-	ReadLine(IN) // skip until "\r\n"
 	buf := make([]byte, 1)
 	// packet type
 	IN.Read(buf)
@@ -244,10 +243,7 @@ func ReadHTTPPacket(IN io.ReadCloser) (byte, []byte, error) {
 	}
 	// print(body)
 
-	IN.Read(buf)           // 0x0d
-	_, err := IN.Read(buf) // 0x0a
-	return packettype, body, err
-	// return packettype, body, nil
+	return packettype, body, nil
 }
 
 // WriteHTTPPacket ...
@@ -605,7 +601,7 @@ func handleListener(l *net.TCPListener) error {
 
 				success := rdgInData(in)
 				if success {
-					handle(in, out)
+					handle(newHttpSock(in), out)
 				}
 			}()
 		}
