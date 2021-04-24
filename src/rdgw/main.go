@@ -138,7 +138,8 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 	websocket := false
 	session2, _ := ntlm.CreateServerSession(ntlm.Version2, ntlm.ConnectionlessMode)
 	auth := ""
-	header := "RDG_OUT_DATA /remoteDesktopGateway/ HTTP/1.1\r\n"
+	// header := "RDG_OUT_DATA /remoteDesktopGateway/ HTTP/1.1\r\n"
+	header := "GET /remoteDesktopGateway/ HTTP/1.1\r\n"
 	head, _ := ReadLine(conn)
 	for {
 		// fmt.Println("=>" + strconv.Itoa(phase))
