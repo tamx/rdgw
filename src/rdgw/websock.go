@@ -11,16 +11,16 @@ import (
 )
 
 type websock struct {
-	Conn   io.ReadWriter
+	Conn   io.ReadWriteCloser
 	Buffer []byte
 }
 
 type headerReader struct {
-	Reader io.ReadWriter
+	Reader io.ReadWriteCloser
 	Header []byte
 }
 
-func newHeaderReader(reader io.ReadWriter,
+func newHeaderReader(reader io.ReadWriteCloser,
 	header string) *headerReader {
 	// fmt.Println(header)
 	r := headerReader{
@@ -51,6 +51,10 @@ func (r *headerReader) Read(p []byte) (int, error) {
 
 func (r *headerReader) Write(b []byte) (int, error) {
 	return r.Reader.Write(b)
+}
+
+func (r *headerReader) Close() error {
+	return r.Reader.Close()
 }
 
 func newWebSock(conn *net.TCPConn, header string) *websock {
@@ -107,5 +111,5 @@ func (sock *websock) Write(b []byte) (int, error) {
 }
 
 func (sock *websock) Close() error {
-	return nil
+	return sock.Conn.Close()
 }

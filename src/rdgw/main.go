@@ -589,10 +589,6 @@ func handleListener(l *net.TCPListener) error {
 		}
 		line, _ := ReadLine(conn) // line is empty when error occured
 		fmt.Printf("%s\n", line)
-		if strings.HasPrefix(line, "POST /KdcProxy ") {
-			conn.Close()
-			continue
-		}
 		if strings.HasPrefix(line, "RDG_OUT_DATA ") {
 			out = conn
 			go rdgOutData(out)
@@ -609,7 +605,15 @@ func handleListener(l *net.TCPListener) error {
 					handle(newHttpSock(in), out)
 				}
 			}()
+			continue
 		}
+		if strings.HasPrefix(line, "POST /KdcProxy ") {
+			conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+			conn.Close()
+			continue
+		}
+		conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+		conn.Close()
 	}
 }
 
