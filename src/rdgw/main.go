@@ -239,7 +239,10 @@ func ReadHTTPPacket(IN io.ReadCloser) (byte, []byte, error) {
 	// fmt.Printf("=>Type: %d, len: %d\n", packettype, length)
 	body := make([]byte, 0)
 	for i := 8; i < length; i++ {
-		IN.Read(buf)
+		_, err := IN.Read(buf)
+		if err != nil {
+			return 0, nil, err
+		}
 		body = append(body, buf[0])
 	}
 	// print(body)
