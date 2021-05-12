@@ -64,6 +64,8 @@ func (sock *httpsock) Write(b []byte) (int, error) {
 }
 
 func (sock *httpsock) Close() error {
-	sock.IN.Close()
-	return sock.OUT.Close()
+	if sock.OUT != nil {
+		sock.OUT.Close()
+	}
+	return sock.IN.Close()
 }
