@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"strconv"
 )
@@ -24,6 +25,9 @@ func (sock *httpsock) Read(p []byte) (int, error) {
 		line, _ := ReadLine(sock.IN) // skip until "\r\n"
 		// fmt.Println(line)
 		length, _ := strconv.ParseInt(line, 16, 32)
+		if length < 0 {
+			return 0, errors.New("it's strange.")
+		}
 		buffer := make([]byte, length)
 		for offset := int64(0); offset < length; {
 			n, err := sock.IN.Read(buffer[offset:])
