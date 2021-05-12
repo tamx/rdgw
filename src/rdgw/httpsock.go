@@ -25,8 +25,14 @@ func (sock *httpsock) Read(p []byte) (int, error) {
 		// fmt.Println(line)
 		length, _ := strconv.ParseInt(line, 16, 32)
 		buffer := make([]byte, length)
-		n, _ := sock.IN.Read(buffer)
-		data = buffer[:n]
+		for offset := int64(0); offset < length; {
+			n, err := sock.IN.Read(buffer[offset:])
+			if err != nil {
+				return 0, err
+			}
+			offset += int64(n)
+		}
+		data = buffer[:length]
 
 		buf := make([]byte, 1)
 		sock.IN.Read(buf)           // 0x0d
