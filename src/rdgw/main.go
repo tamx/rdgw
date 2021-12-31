@@ -86,6 +86,10 @@ func ReadLine(conn io.ReadCloser) (string, error) {
 		if old == 0x0d && buf[0] == 0x0a {
 			return string(line), nil
 		}
+		if buf[0] == 0x0a {
+			line = append(line, old)
+			return string(line), nil
+		}
 		if old != 0x00 {
 			line = append(line, old)
 		}
@@ -99,14 +103,20 @@ func responseUnauth(conn *net.TCPConn, chaMsg string) {
 	if chaMsg != "" {
 		conn.Write([]byte("WWW-Authenticate: " + chaMsg + "\r\n"))
 	}
+	// conn.Write([]byte("WWW-Authenticate: Negotiate\r\n"))
+	// conn.Write([]byte("WWW-Authenticate: NTLM\r\n"))
 	conn.Write([]byte("WWW-Authenticate: " +
-		"Digest realm=\"secret\", nonce=\"12345678901234567890123456789012\", algorithm=MD5, qop=auth\r\n"))
+		"Digest qop=\"auth\", realm=\"secret\", " +
+		"nonce=\"12345678901234567890123456789012\", " +
+		"algorithm=MD5\r\n"))
 	conn.Write([]byte("WWW-Authenticate: Basic realm=\"SECRET AREA\"\r\n"))
 	conn.Write([]byte("Content-Length: 0\r\n"))
 	conn.Write([]byte("\r\n"))
 }
 
-func authNtlm2(conn *net.TCPConn, session2 ntlm.ServerSession, auth, ntlmHeader string) bool {
+func authNtlm2(conn *net.TCPConn,
+	session2 ntlm.ServerSession,
+	auth, ntlmHeader string) bool {
 	auth = auth[strings.Index(auth, ntlmHeader)+len(ntlmHeader)+1:]
 	// fmt.Println("Auth: " + auth)
 	data, _ := base64.StdEncoding.DecodeString(auth)
@@ -149,24 +159,24 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 			log.Println(err)
 			return false
 		}
-		fmt.Printf("%s\n", line)
+		// fmt.Printf("%s\n", line)
 		if strings.HasPrefix(strings.ToLower(line), "authorization:") {
 			auth = line
 		} else if strings.HasPrefix(strings.ToLower(line), "upgrade:") {
 			websocket = true
 		} else if line == "" {
 			if auth == "" {
-			} else if strings.Index(auth, "NTLM") >= 0 {
+			} else if strings.Contains(auth, "NTLM") {
 				if authNtlm2(conn, session2, auth, "NTLM") {
 					break
 				}
 				continue
-			} else if strings.Index(auth, "Negotiate") >= 0 {
+			} else if strings.Contains(auth, "Negotiate") {
 				if authNtlm2(conn, session2, auth, "Negotiate") {
 					break
 				}
 				continue
-			} else if strings.Index(auth, "Digest") >= 0 {
+			} else if strings.Contains(auth, "Digest") {
 				index := strings.Index(auth, "Digest ")
 				auth = auth[index:]
 				index = strings.Index(head, " ")
@@ -174,7 +184,7 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 				if digest.CheckAuth(auth, method, checkHandler) {
 					break
 				}
-			} else if strings.Index(auth, "Basic") >= 0 {
+			} else if strings.Contains(auth, "Basic") {
 				index := strings.Index(auth, "Basic ")
 				auth = auth[index:]
 				auth = auth[6:]
@@ -198,11 +208,16 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 
 	conn.Write([]byte("HTTP/1.1 200 OK\r\n"))
 	conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
+	date := time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05")
+	// fmt.Println("Date: " + date + " GMT\r\n")
+	conn.Write([]byte("Date: " + date + " GMT\r\n"))
+	if rdgOut {
+		conn.Write([]byte("\r\n"))
+		conn.Write([]byte{0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd})
+		return true
+	}
 	conn.Write([]byte("Content-Length: 0\r\n"))
 	conn.Write([]byte("\r\n"))
-	if rdgOut {
-		conn.Write([]byte{0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd})
-	}
 
 	for {
 		line, err := ReadLine(conn)
@@ -210,7 +225,7 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 			log.Println(err)
 			return false
 		}
-		// fmt.Printf("%s\n", line)
+		// fmt.Printf("=>%s\n", line)
 		if line == "" {
 			break
 		}
@@ -221,6 +236,7 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 // ReadHTTPPacket ...
 func ReadHTTPPacket(IN io.ReadCloser) (byte, []byte, error) {
 	buf := make([]byte, 1)
+	// fmt.Println("READ")
 	// packet type
 	IN.Read(buf)
 	packettype := buf[0]
@@ -374,9 +390,13 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 		if port != 3389 {
 			return nil
 		}
-		err = exec.Command("kick.sh", string(server)).Start()
-		if err != nil {
-			fmt.Println(err.Error())
+		{
+			cmd := exec.Command("kick.sh", string(server))
+			err := cmd.Start()
+			if err != nil {
+				fmt.Println(err.Error())
+			}
+			go cmd.Wait()
 		}
 
 		// HTTP CHANNEL RESPONSE
@@ -476,7 +496,7 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 
 func pipe(conn *net.TCPConn) {
 	fmt.Println("Accepted.")
-	tcpAddr, _ := net.ResolveTCPAddr("tcp4", "winsvr2012-1:80")
+	tcpAddr, _ := net.ResolveTCPAddr("tcp4", "192.168.6.207:80")
 	rdg, err := net.DialTCP("tcp4", nil, tcpAddr)
 	if err != nil {
 		log.Println(err)
@@ -491,6 +511,7 @@ func pipe(conn *net.TCPConn) {
 				return
 			}
 			if size > 0 {
+				fmt.Println(string(buf[:size]))
 				print(buf[:size])
 				conn.Write(buf[:size])
 			}
@@ -504,6 +525,7 @@ func pipe(conn *net.TCPConn) {
 			return
 		}
 		if size > 0 {
+			fmt.Println(string(buf[:size]))
 			print(buf[:size])
 			rdg.Write(buf[:size])
 		}
@@ -593,6 +615,8 @@ func handleListener(l *net.TCPListener) error {
 		if err != nil {
 			return err
 		}
+		// go pipe(conn)
+		// continue
 		line, _ := ReadLine(conn) // line is empty when error occured
 		fmt.Printf("%s\n", line)
 		if strings.HasPrefix(line, "RDG_OUT_DATA ") {
@@ -608,7 +632,8 @@ func handleListener(l *net.TCPListener) error {
 
 				success := rdgInData(in)
 				if success {
-					handle(newHttpSock(in), out)
+					handle(newHttpSock(in),
+						newHttpSock(out))
 				}
 			}()
 			continue

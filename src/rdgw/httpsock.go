@@ -26,7 +26,7 @@ func (sock *httpsock) Read(p []byte) (int, error) {
 		// fmt.Println(line)
 		length, _ := strconv.ParseInt(line, 16, 32)
 		if length < 0 {
-			return 0, errors.New("it's strange.")
+			return 0, errors.New("strange length")
 		}
 		buffer := make([]byte, length)
 		for offset := int64(0); offset < length; {
@@ -38,12 +38,11 @@ func (sock *httpsock) Read(p []byte) (int, error) {
 		}
 		data = buffer[:length]
 
-		buf := make([]byte, 1)
-		sock.IN.Read(buf)           // 0x0d
-		_, err := sock.IN.Read(buf) // 0x0a
+		line, err := ReadLine(sock.IN)
 		if err != nil {
 			return 0, err
 		}
+		// fmt.Println(line)
 	}
 	if len(data) <= len(p) {
 		for i := 0; i < len(data); i++ {
@@ -60,7 +59,11 @@ func (sock *httpsock) Read(p []byte) (int, error) {
 }
 
 func (sock *httpsock) Write(b []byte) (int, error) {
-	return sock.OUT.Write(b)
+	// cLength := fmt.Sprintf("%x", len(b))
+	// fmt.Println(cLength)
+	// sock.IN.Write([]byte(cLength + "\n"))
+	// print(b)
+	return sock.IN.Write(b)
 }
 
 func (sock *httpsock) Close() error {
