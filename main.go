@@ -24,12 +24,18 @@ var (
 	usermap = map[string]string{}
 )
 
-func checkHandler(username string) string {
+func checkAuth(username string) string {
 	pass, ok := usermap[username]
 	if !ok {
 		return ""
 	}
 	return pass
+}
+
+func checkHandler(username, realm string) string {
+	pass := checkAuth(username)
+	a1md5 := digest.ComputeMD5Password(username, realm, pass)
+	return a1md5
 }
 
 func print(bs []byte) {
@@ -132,7 +138,7 @@ func authNtlm2(conn *net.TCPConn,
 	}
 	username := am.UserName.String()
 	fmt.Println("User: " + username)
-	password := checkHandler(username)
+	password := checkAuth(username)
 	session2.SetUserInfo(username, password, "")
 	err = session2.ProcessAuthenticateMessage(am)
 	if err != nil {
@@ -192,7 +198,7 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 				checkStr := string(checkByte)
 				username := checkStr[:strings.IndexRune(checkStr, ':')]
 				password := checkStr[strings.IndexRune(checkStr, ':')+1:]
-				if password == checkHandler(username) {
+				if password == checkAuth(username) {
 					break
 				}
 			}
