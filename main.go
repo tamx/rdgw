@@ -108,39 +108,54 @@ func responseUnauth(conn *net.TCPConn, chaMsg string) {
 	conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
 	if chaMsg != "" {
 		conn.Write([]byte("WWW-Authenticate: " + chaMsg + "\r\n"))
+	} else {
+		conn.Write([]byte("WWW-Authenticate: Negotiate\r\n"))
+		// conn.Write([]byte("WWW-Authenticate: NTLM\r\n"))
+		conn.Write([]byte("WWW-Authenticate: " +
+			"Digest qop=\"auth\", realm=\"secret\", " +
+			"nonce=\"12345678901234567890123456789012\", " +
+			"algorithm=MD5\r\n"))
+		conn.Write([]byte("WWW-Authenticate: Basic realm=\"SECRET AREA\"\r\n"))
 	}
-	// conn.Write([]byte("WWW-Authenticate: Negotiate\r\n"))
-	// conn.Write([]byte("WWW-Authenticate: NTLM\r\n"))
-	conn.Write([]byte("WWW-Authenticate: " +
-		"Digest qop=\"auth\", realm=\"secret\", " +
-		"nonce=\"12345678901234567890123456789012\", " +
-		"algorithm=MD5\r\n"))
-	conn.Write([]byte("WWW-Authenticate: Basic realm=\"SECRET AREA\"\r\n"))
 	conn.Write([]byte("Content-Length: 0\r\n"))
 	conn.Write([]byte("\r\n"))
 }
 
+var session2 ntlm.ServerSession
+
 func authNtlm2(conn *net.TCPConn,
-	session2 ntlm.ServerSession,
 	auth, ntlmHeader string) bool {
 	auth = auth[strings.Index(auth, ntlmHeader)+len(ntlmHeader)+1:]
-	// fmt.Println("Auth: " + auth)
+	fmt.Println("Auth: " + auth)
 	data, _ := base64.StdEncoding.DecodeString(auth)
-	am, err := ntlm.ParseAuthenticateMessage(data, 2)
+	authMessage, err := ntlm.ParseAuthenticateMessage(data,
+		int(ntlm.Version2))
 	if err != nil {
 		log.Println(err)
-		session2.ProcessNegotiateMessage(nil)
-		challenge, _ := session2.GenerateChallengeMessage()
-		chaMsg := base64.StdEncoding.EncodeToString(challenge.Bytes())
-		// fmt.Println("Challenge: " + chaMsg)
+		// session2, _ = ntlm.CreateServerSession(ntlm.Version2,
+		// 	ntlm.ConnectionlessMode)
+		session2, _ = ntlm.CreateServerSession(ntlm.Version2,
+			ntlm.ConnectionOrientedMode)
+		// session2.ProcessNegotiateMessage(nil)
+		challenge, err := session2.GenerateChallengeMessage()
+		if err != nil {
+			log.Println(err)
+			return false
+		}
+		chaMsg := base64.StdEncoding.
+			EncodeToString(challenge.Bytes())
+		fmt.Println("Challenge: " + chaMsg)
 		responseUnauth(conn, ntlmHeader+" "+chaMsg)
 		return false
 	}
-	username := am.UserName.String()
-	fmt.Println("User: " + username)
+	username := authMessage.UserName.String()
+	domain := authMessage.DomainName.String()
+	workstation := authMessage.Workstation.String()
+	fmt.Println("WorkStation: " + workstation)
+	fmt.Println("User: " + username + " Domain: " + domain)
 	password := checkAuth(username)
-	session2.SetUserInfo(username, password, "")
-	err = session2.ProcessAuthenticateMessage(am)
+	session2.SetUserInfo(username, password, domain)
+	err = session2.ProcessAuthenticateMessage(authMessage)
 	if err != nil {
 		log.Println(err)
 		responseUnauth(conn, "")
@@ -152,7 +167,6 @@ func authNtlm2(conn *net.TCPConn,
 
 func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 	websocket := false
-	session2, _ := ntlm.CreateServerSession(ntlm.Version2, ntlm.ConnectionlessMode)
 	auth := ""
 	// header := "RDG_OUT_DATA /remoteDesktopGateway/ HTTP/1.1\r\n"
 	header := "GET /remoteDesktopGateway/ HTTP/1.1\r\n"
@@ -165,7 +179,7 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 			log.Println(err)
 			return false
 		}
-		// fmt.Printf("%s\n", line)
+		fmt.Printf("%s\n", line)
 		if strings.HasPrefix(strings.ToLower(line), "authorization:") {
 			auth = line
 		} else if strings.HasPrefix(strings.ToLower(line), "upgrade:") {
@@ -173,12 +187,14 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 		} else if line == "" {
 			if auth == "" {
 			} else if strings.Contains(auth, "NTLM") {
-				if authNtlm2(conn, session2, auth, "NTLM") {
+				// freerdp
+				if authNtlm2(conn, auth, "NTLM") {
 					break
 				}
 				continue
 			} else if strings.Contains(auth, "Negotiate") {
-				if authNtlm2(conn, session2, auth, "Negotiate") {
+				// windows?
+				if authNtlm2(conn, auth, "Negotiate") {
 					break
 				}
 				continue
