@@ -1,10 +1,10 @@
 module rdgw
 
-go 1.17
+go 1.21.4
 
 require (
-	github.com/gobwas/ws v1.1.0
-	github.com/tamx/golang-digest v0.0.0-20220617021657-8dc98a177d5f
+	github.com/gobwas/ws v1.3.2
+	github.com/tamx/golang-digest v0.0.0-20230315230417-141bd82aa640
 	github.com/tamx/golang-github-thomsonreuterseikon-go-ntlm v0.0.0-20170724044155-2cfbe50241e1
 )
 

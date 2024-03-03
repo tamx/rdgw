@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"net"
@@ -109,12 +108,13 @@ func responseUnauth(conn *net.TCPConn, chaMsg string) {
 	if chaMsg != "" {
 		conn.Write([]byte("WWW-Authenticate: " + chaMsg + "\r\n"))
 	} else {
-		conn.Write([]byte("WWW-Authenticate: Negotiate\r\n"))
-		// conn.Write([]byte("WWW-Authenticate: NTLM\r\n"))
-		conn.Write([]byte("WWW-Authenticate: " +
-			"Digest qop=\"auth\", realm=\"secret\", " +
-			"nonce=\"12345678901234567890123456789012\", " +
-			"algorithm=MD5\r\n"))
+		// conn.Write([]byte("WWW-Authenticate: Negotiate\r\n"))
+		conn.Write([]byte("WWW-Authenticate: NTLM\r\n"))
+		conn.Write([]byte(
+			"WWW-Authenticate: " +
+				"Digest qop=\"auth\", realm=\"secret\", " +
+				"nonce=\"12345678901234567890123456789012\", " +
+				"algorithm=MD5\r\n"))
 		conn.Write([]byte("WWW-Authenticate: Basic realm=\"SECRET AREA\"\r\n"))
 	}
 	conn.Write([]byte("Content-Length: 0\r\n"))
@@ -142,10 +142,11 @@ func authNtlm2(conn *net.TCPConn,
 			log.Println(err)
 			return false
 		}
-		chaMsg := base64.StdEncoding.
-			EncodeToString(challenge.Bytes())
+		chaMsg := ntlmHeader + " " +
+			base64.StdEncoding.
+				EncodeToString(challenge.Bytes())
 		fmt.Println("Challenge: " + chaMsg)
-		responseUnauth(conn, ntlmHeader+" "+chaMsg)
+		responseUnauth(conn, chaMsg)
 		return false
 	}
 	username := authMessage.UserName.String()
@@ -563,7 +564,7 @@ func readCert() []byte {
 	defer f.Close()
 
 	// 一気に全部読み取り
-	b, err := ioutil.ReadAll(f)
+	b, err := io.ReadAll(f)
 	// fmt.Print(string(b))
 
 	buf := make([]byte, 0)
@@ -620,6 +621,7 @@ func rdgInData(conn *net.TCPConn) bool {
 func rdgOutData(conn *net.TCPConn) bool {
 	fmt.Println("Accepted OUT.")
 	if !authNtlm(conn, true) {
+		conn.Close()
 		return false
 	}
 	fmt.Println("Start OUT.")
