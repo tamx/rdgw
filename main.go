@@ -108,14 +108,14 @@ func responseUnauth(conn *net.TCPConn, chaMsg string) {
 	if chaMsg != "" {
 		conn.Write([]byte("WWW-Authenticate: " + chaMsg + "\r\n"))
 	} else {
-		// conn.Write([]byte("WWW-Authenticate: Negotiate\r\n"))
-		conn.Write([]byte("WWW-Authenticate: NTLM\r\n"))
 		conn.Write([]byte(
 			"WWW-Authenticate: " +
 				"Digest qop=\"auth\", realm=\"secret\", " +
 				"nonce=\"12345678901234567890123456789012\", " +
 				"algorithm=MD5\r\n"))
 		conn.Write([]byte("WWW-Authenticate: Basic realm=\"SECRET AREA\"\r\n"))
+		conn.Write([]byte("WWW-Authenticate: Negotiate\r\n"))
+		// conn.Write([]byte("WWW-Authenticate: NTLM\r\n"))
 	}
 	conn.Write([]byte("Content-Length: 0\r\n"))
 	conn.Write([]byte("\r\n"))
@@ -136,7 +136,6 @@ func authNtlm2(conn *net.TCPConn,
 		// 	ntlm.ConnectionlessMode)
 		session2, _ = ntlm.CreateServerSession(ntlm.Version2,
 			ntlm.ConnectionOrientedMode)
-		// session2.ProcessNegotiateMessage(nil)
 		challenge, err := session2.GenerateChallengeMessage()
 		if err != nil {
 			log.Println(err)
@@ -173,55 +172,57 @@ func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
 	header := "GET /remoteDesktopGateway/ HTTP/1.1\r\n"
 	head, _ := ReadLine(conn)
 	for {
-		// fmt.Println("=>" + strconv.Itoa(phase))
 		line, err := ReadLine(conn)
-		header += line + "\r\n"
 		if err != nil {
 			log.Println(err)
 			return false
 		}
+		// fmt.Println("=>" + strconv.Itoa(phase))
+		header += line + "\r\n"
 		fmt.Printf("%s\n", line)
-		if strings.HasPrefix(strings.ToLower(line), "authorization:") {
+		if strings.HasPrefix(strings.ToLower(line),
+			"authorization:") {
 			auth = line
-		} else if strings.HasPrefix(strings.ToLower(line), "upgrade:") {
+		} else if strings.HasPrefix(strings.ToLower(line),
+			"upgrade:") {
 			websocket = true
-		} else if line == "" {
-			if auth == "" {
-			} else if strings.Contains(auth, "NTLM") {
-				// freerdp
-				if authNtlm2(conn, auth, "NTLM") {
-					break
-				}
-				continue
-			} else if strings.Contains(auth, "Negotiate") {
-				// windows?
-				if authNtlm2(conn, auth, "Negotiate") {
-					break
-				}
-				continue
-			} else if strings.Contains(auth, "Digest") {
-				index := strings.Index(auth, "Digest ")
-				auth = auth[index:]
-				index = strings.Index(head, " ")
-				method := head[:index]
-				if digest.CheckAuth(auth, method, checkHandler) {
-					break
-				}
-			} else if strings.Contains(auth, "Basic") {
-				index := strings.Index(auth, "Basic ")
-				auth = auth[index:]
-				auth = auth[6:]
-				checkByte, _ := base64.StdEncoding.DecodeString(auth)
-				checkStr := string(checkByte)
-				username := checkStr[:strings.IndexRune(checkStr, ':')]
-				password := checkStr[strings.IndexRune(checkStr, ':')+1:]
-				if password == checkAuth(username) {
-					break
-				}
+		}
+		if line != "" {
+			continue
+		} else if strings.Contains(auth, "NTLM") {
+			// freerdp
+			if authNtlm2(conn, auth, "NTLM") {
+				break
 			}
+		} else if strings.Contains(auth, "Negotiate") {
+			// windows?
+			if authNtlm2(conn, auth, "Negotiate") {
+				break
+			}
+		} else if strings.Contains(auth, "Digest") {
+			index := strings.Index(auth, "Digest ")
+			auth = auth[index:]
+			index = strings.Index(head, " ")
+			method := head[:index]
+			if digest.CheckAuth(auth, method, checkHandler) {
+				break
+			}
+		} else if strings.Contains(auth, "Basic") {
+			index := strings.Index(auth, "Basic ")
+			auth = auth[index:]
+			auth = auth[6:]
+			checkByte, _ := base64.StdEncoding.DecodeString(auth)
+			checkStr := string(checkByte)
+			username := checkStr[:strings.IndexRune(checkStr, ':')]
+			password := checkStr[strings.IndexRune(checkStr, ':')+1:]
+			if password == checkAuth(username) {
+				break
+			}
+		} else {
 			responseUnauth(conn, "")
 		}
 	}
+	fmt.Println("Auth succeeded.")
 
 	if websocket {
 		sock := newWebSock(conn, header)
