@@ -2,6 +2,9 @@
 
 rdgw は Microsoft の Remote Desktop Protocol を中継する Gateway サーバーです。
 
+## 紹介記事
+[https://zenn.dev/greek_academy/articles/article20240321-rdgw](https://zenn.dev/greek_academy/articles/article20240321-rdgw)
+
 ## 使い方
 
 ~~~
