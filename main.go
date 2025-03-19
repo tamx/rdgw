@@ -66,7 +66,6 @@ func print(bs []byte) {
 }
 
 func createRandom(size int) []byte {
-	rand.Seed(time.Now().UnixNano())
 	buf := make([]byte, 0)
 	for i := 0; i < size; i++ {
 		buf = append(buf, byte(rand.Int()%256))
