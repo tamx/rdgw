@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -449,6 +450,7 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 			return err
 		}
 		defer rdp.Close()
+		SetKeepAlive(rdp)
 
 		go func() {
 			stuck := make([]byte, 0)
@@ -628,6 +630,21 @@ func rdgOutData(conn *net.TCPConn) bool {
 	return true
 }
 
+func SetKeepAlive(conn net.Conn) error {
+	tcpConn, ok := conn.(*net.TCPConn)
+	if !ok {
+		return errors.New("error: not *net.TCPConn")
+	}
+	// Set Keep-Alive
+	if err := tcpConn.SetKeepAlive(true); err != nil {
+		return err
+	}
+	if err := tcpConn.SetKeepAlivePeriod(10 * time.Second); err != nil {
+		return err
+	}
+	return nil
+}
+
 func handleListener(l *net.TCPListener) error {
 	defer l.Close()
 
@@ -639,6 +656,7 @@ func handleListener(l *net.TCPListener) error {
 		if err != nil {
 			return err
 		}
+		SetKeepAlive(conn)
 		// go pipe(conn)
 		// continue
 		line, _ := ReadLine(conn) // line is empty when error occured
