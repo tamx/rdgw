@@ -2,7 +2,6 @@ package main
 
 import (
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 
@@ -80,7 +79,7 @@ func (sock *websock) Read(p []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		data, err = ioutil.ReadAll(reader)
+		data, err = io.ReadAll(reader)
 		if err != nil {
 			return 0, err
 		}
