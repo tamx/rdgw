@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -102,28 +103,38 @@ func ReadLine(conn io.ReadCloser) (string, error) {
 	}
 }
 
-func responseUnauth(conn *net.TCPConn, chaMsg string) {
-	conn.Write([]byte("HTTP/1.1 401 Unauthorized\r\n"))
-	conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
+func responseUnauth(w http.ResponseWriter, chaMsg string) {
+	// conn.Write([]byte("HTTP/1.1 401 Unauthorized\r\n"))
+	// conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
+	w.Header().Add("Server", "Microsoft-HTTPAPI/2.0")
 	if chaMsg != "" {
-		conn.Write([]byte("WWW-Authenticate: " + chaMsg + "\r\n"))
+		// conn.Write([]byte("WWW-Authenticate: " + chaMsg + "\r\n"))
+		w.Header().Add("WWW-Authenticate", chaMsg)
 	} else {
-		conn.Write([]byte(
-			"WWW-Authenticate: " +
-				"Digest qop=\"auth\", realm=\"secret\", " +
-				"nonce=\"12345678901234567890123456789012\", " +
-				"algorithm=MD5\r\n"))
-		conn.Write([]byte("WWW-Authenticate: Basic realm=\"SECRET AREA\"\r\n"))
-		conn.Write([]byte("WWW-Authenticate: Negotiate\r\n"))
+		// conn.Write([]byte(
+		// 	"WWW-Authenticate: " +
+		// 		"Digest qop=\"auth\", realm=\"secret\", " +
+		// 		"nonce=\"12345678901234567890123456789012\", " +
+		// 		"algorithm=MD5\r\n"))
+		w.Header().Add("WWW-Authenticate",
+			"Digest qop=\"auth\", realm=\"secret\", "+
+				"nonce=\"12345678901234567890123456789012\", "+
+				"algorithm=MD5")
+		// conn.Write([]byte("WWW-Authenticate: Basic realm=\"SECRET AREA\"\r\n"))
+		w.Header().Add("WWW-Authenticate", "Basic realm=\"SECRET AREA\"")
+		// conn.Write([]byte("WWW-Authenticate: Negotiate\r\n"))
+		w.Header().Add("WWW-Authenticate", "Negotiate")
 		// conn.Write([]byte("WWW-Authenticate: NTLM\r\n"))
 	}
-	conn.Write([]byte("Content-Length: 0\r\n"))
-	conn.Write([]byte("\r\n"))
+	// conn.Write([]byte("Content-Length: 0\r\n"))
+	w.Header().Add("Content-Length", "0")
+	// conn.Write([]byte("\r\n"))
+	w.WriteHeader(http.StatusUnauthorized)
 }
 
 var session2 ntlm.ServerSession
 
-func authNtlm2(conn *net.TCPConn,
+func authNtlm(w http.ResponseWriter,
 	auth, ntlmHeader string) bool {
 	auth = auth[strings.Index(auth, ntlmHeader)+len(ntlmHeader)+1:]
 	fmt.Println("Auth: " + auth)
@@ -145,7 +156,7 @@ func authNtlm2(conn *net.TCPConn,
 			base64.StdEncoding.
 				EncodeToString(challenge.Bytes())
 		fmt.Println("Challenge: " + chaMsg)
-		responseUnauth(conn, chaMsg)
+		responseUnauth(w, chaMsg)
 		return false
 	}
 	username := authMessage.UserName.String()
@@ -158,78 +169,49 @@ func authNtlm2(conn *net.TCPConn,
 	err = session2.ProcessAuthenticateMessage(authMessage)
 	if err != nil {
 		log.Println(err)
-		responseUnauth(conn, "")
-		conn.Close()
+		responseUnauth(w, "")
 		return false
 	}
 	return true
 }
 
-func authNtlm(conn *net.TCPConn, rdgOut bool) bool {
-	websocket := false
-	auth := ""
-	// header := "RDG_OUT_DATA /remoteDesktopGateway/ HTTP/1.1\r\n"
-	header := "GET /remoteDesktopGateway/ HTTP/1.1\r\n"
-	head, _ := ReadLine(conn)
-	for {
-		line, err := ReadLine(conn)
-		if err != nil {
-			log.Println(err)
-			return false
+func auth(auth string, w http.ResponseWriter) bool {
+	if strings.Contains(auth, "NTLM") {
+		// freerdp
+		if authNtlm(w, auth, "NTLM") {
+			return true
 		}
-		// fmt.Println("=>" + strconv.Itoa(phase))
-		header += line + "\r\n"
-		fmt.Printf("%s\n", line)
-		if strings.HasPrefix(strings.ToLower(line),
-			"authorization:") {
-			auth = line
-		} else if strings.HasPrefix(strings.ToLower(line),
-			"upgrade:") {
-			websocket = true
+	} else if strings.Contains(auth, "Negotiate") {
+		// windows?
+		if authNtlm(w, auth, "Negotiate") {
+			return true
 		}
-		if line != "" {
-			continue
-		} else if strings.Contains(auth, "NTLM") {
-			// freerdp
-			if authNtlm2(conn, auth, "NTLM") {
-				break
-			}
-		} else if strings.Contains(auth, "Negotiate") {
-			// windows?
-			if authNtlm2(conn, auth, "Negotiate") {
-				break
-			}
-		} else if strings.Contains(auth, "Digest") {
-			index := strings.Index(auth, "Digest ")
-			auth = auth[index:]
-			index = strings.Index(head, " ")
-			method := head[:index]
-			if digest.CheckAuth(auth, method, checkHandler) {
-				break
-			}
-		} else if strings.Contains(auth, "Basic") {
-			index := strings.Index(auth, "Basic ")
-			auth = auth[index:]
-			auth = auth[6:]
-			checkByte, _ := base64.StdEncoding.DecodeString(auth)
-			checkStr := string(checkByte)
-			username := checkStr[:strings.IndexRune(checkStr, ':')]
-			password := checkStr[strings.IndexRune(checkStr, ':')+1:]
-			if password == checkAuth(username) {
-				break
-			}
-		} else {
-			responseUnauth(conn, "")
+		// } else if strings.Contains(auth, "Digest") {
+		// 	index := strings.Index(auth, "Digest ")
+		// 	auth = auth[index:]
+		// 	index = strings.Index(head, " ")
+		// 	method := head[:index]
+		// 	if digest.CheckAuth(auth, method, checkHandler) {
+		// 		return true
+		// 	}
+	} else if strings.Contains(auth, "Basic") {
+		index := strings.Index(auth, "Basic ")
+		auth = auth[index:]
+		auth = auth[6:]
+		checkByte, _ := base64.StdEncoding.DecodeString(auth)
+		checkStr := string(checkByte)
+		username := checkStr[:strings.IndexRune(checkStr, ':')]
+		password := checkStr[strings.IndexRune(checkStr, ':')+1:]
+		if password == checkAuth(username) {
+			return true
 		}
+	} else {
+		responseUnauth(w, "")
 	}
-	fmt.Println("Auth succeeded.")
+	return false
+}
 
-	if websocket {
-		sock := newWebSock(conn, header)
-		go handle(sock, sock)
-		return true
-	}
-
+func UpgradeForHTTP(conn *net.TCPConn, rdgOut bool) bool {
 	conn.Write([]byte("HTTP/1.1 200 OK\r\n"))
 	conn.Write([]byte("Server: Microsoft-HTTPAPI/2.0\r\n"))
 	date := time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05")
@@ -317,7 +299,7 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 	defer OUT.Close()
 
 	// HTTP HANDSHAKE REQUEST
-	ptype, body, err := ReadHTTPPacket(IN)
+	_, _, err := ReadHTTPPacket(IN)
 	if err != nil {
 		return err
 	}
@@ -339,7 +321,7 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 		return err
 	}
 	// TUNNEL CREATE
-	ptype, body, err = ReadHTTPPacket(IN)
+	_, _, err = ReadHTTPPacket(IN)
 	if err != nil {
 		return err
 	}
@@ -371,7 +353,7 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 		return err
 	}
 	// TUNNEL AUTH
-	ptype, body, err = ReadHTTPPacket(IN)
+	_, _, err = ReadHTTPPacket(IN)
 	if err != nil {
 		return err
 	}
@@ -397,20 +379,22 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 	}
 
 	for {
-		ptype, body, err = ReadHTTPPacket(IN)
+		ptype, body, err := ReadHTTPPacket(IN)
 		if err != nil {
 			return err
 		}
+		// fmt.Printf("Pakcet: %d", ptype)
 		if ptype != 0x8 {
 			return nil
 		}
 		server := make([]byte, 0)
+		port := 0
 		for i := 8; i < len(body)-2; i += 2 {
 			server = append(server, body[i])
 		}
-		port := (0xff & int(body[2]))
+		port = (0xff & int(body[2]))
 		port |= (0xff & int(body[3])) << 8
-		fmt.Println(string(server) + ":" + strconv.Itoa(port))
+		println(string(server) + ":" + strconv.Itoa(port))
 		if port != 3389 {
 			return nil
 		}
@@ -418,7 +402,7 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 			cmd := exec.Command("kick.sh", string(server))
 			err := cmd.Start()
 			if err != nil {
-				fmt.Println(err.Error())
+				println(err.Error())
 			}
 			go cmd.Wait()
 		}
@@ -445,12 +429,13 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 			return err
 		}
 
+		// println(string(server) + ":" + strconv.Itoa(port))
 		rdp, err := net.Dial("tcp4", string(server)+":"+strconv.Itoa(port))
 		if err != nil {
 			return err
 		}
 		defer rdp.Close()
-		SetKeepAlive(rdp)
+		// SetKeepAlive(rdp)
 
 		go func() {
 			stuck := make([]byte, 0)
@@ -459,6 +444,8 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 				size, err := rdp.Read(buf)
 				if err != nil {
 					log.Println(err)
+					// IN.Close()
+					// OUT.Close()
 					return
 				}
 				stuck = append(stuck, buf[:size]...)
@@ -501,8 +488,10 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 			if err != nil {
 				return err
 			}
+			// fmt.Printf("Pakcet: %d", ptype)
 			if ptype == 10 {
 				size := (0xff & int(body[0])) | (0xff & int(body[1]) << 8)
+				// fmt.Printf("Write: %d\n", size)
 				_, err = rdp.Write(body[2:(size + 2)])
 				if err != nil {
 					return err
@@ -557,28 +546,32 @@ func pipe(conn *net.TCPConn) {
 	}
 }
 
-func readCert() []byte {
-	f, err := os.Open("cert")
-	if err != nil {
-		fmt.Println("error")
-		return nil
-	}
-	defer f.Close()
+// func readCert() []byte {
+// 	f, err := os.Open("cert")
+// 	if err != nil {
+// 		fmt.Println("error")
+// 		return nil
+// 	}
+// 	defer f.Close()
 
-	// 一気に全部読み取り
-	b, err := io.ReadAll(f)
-	// fmt.Print(string(b))
+// 	// 一気に全部読み取り
+// 	b, err := io.ReadAll(f)
+// 	if err != nil {
+// 		println(err.Error())
+// 		return nil
+// 	}
+// 	// fmt.Print(string(b))
 
-	buf := make([]byte, 0)
-	for _, v := range b {
-		buf = append(buf, v)
-		buf = append(buf, 0)
-	}
-	buf = append(buf, 0)
-	buf = append(buf, 0)
-	// print(buf)
-	return buf
-}
+// 	buf := make([]byte, 0)
+// 	for _, v := range b {
+// 		buf = append(buf, v)
+// 		buf = append(buf, 0)
+// 	}
+// 	buf = append(buf, 0)
+// 	buf = append(buf, 0)
+// 	// print(buf)
+// 	return buf
+// }
 
 // UDPHandler ...
 func UDPHandler() {
@@ -611,25 +604,6 @@ func UDPHandler() {
 	}
 }
 
-func rdgInData(conn *net.TCPConn) bool {
-	fmt.Println("Accepted IN.")
-	if !authNtlm(conn, false) {
-		return false
-	}
-	fmt.Println("Start IN.")
-	return true
-}
-
-func rdgOutData(conn *net.TCPConn) bool {
-	fmt.Println("Accepted OUT.")
-	if !authNtlm(conn, true) {
-		conn.Close()
-		return false
-	}
-	fmt.Println("Start OUT.")
-	return true
-}
-
 func SetKeepAlive(conn net.Conn) error {
 	tcpConn, ok := conn.(*net.TCPConn)
 	if !ok {
@@ -645,49 +619,24 @@ func SetKeepAlive(conn net.Conn) error {
 	return nil
 }
 
-func handleListener(l *net.TCPListener) error {
-	defer l.Close()
-
-	// go UDPHandler()
-
-	var out *net.TCPConn
-	for {
-		conn, err := l.AcceptTCP()
-		if err != nil {
-			return err
-		}
-		SetKeepAlive(conn)
-		// go pipe(conn)
-		// continue
-		line, _ := ReadLine(conn) // line is empty when error occured
-		fmt.Printf("%s\n", line)
-		if strings.HasPrefix(line, "RDG_OUT_DATA ") {
-			out = conn
-			go rdgOutData(out)
-			continue
-		}
-		if strings.HasPrefix(line, "RDG_IN_DATA ") && out != nil {
-			in := conn
-			go func() {
-				defer in.Close()
-				defer out.Close()
-
-				success := rdgInData(in)
-				if success {
-					handle(newHttpSock(in),
-						newHttpSock(out))
-				}
-			}()
-			continue
-		}
-		if strings.HasPrefix(line, "POST /KdcProxy ") {
-			conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
-			conn.Close()
-			continue
-		}
-		conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
-		conn.Close()
+func httpHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "RDG_OUT_DATA" {
+		return
 	}
+	println("Accepted OUT.")
+	authorization := r.Header.Get("Authorization")
+	if !auth(authorization, w) {
+		return
+	}
+	sock := newWebSock(w, r)
+	go func() {
+		defer sock.Close()
+		err := handle(sock, sock)
+		if err != nil {
+			println(err.Error())
+		}
+	}()
+	println("Start OUT.")
 }
 
 var udpport int = 3391
@@ -709,20 +658,10 @@ func main() {
 		usermap[user] = pass
 	}
 
-	tcpAddr, err := net.ResolveTCPAddr("tcp", "0.0.0.0:13389")
-	if err != nil {
-		log.Println("ResolveTCPAddr", err)
-		return
+	server := http.Server{
+		Addr:    "0.0.0.0:13389",
+		Handler: nil,
 	}
-
-	l, err := net.ListenTCP("tcp", tcpAddr)
-	if err != nil {
-		log.Println("ListenTCP", err)
-		return
-	}
-
-	err = handleListener(l)
-	if err != nil {
-		log.Println("handleListener", err)
-	}
+	http.HandleFunc("/", httpHandler)
+	server.ListenAndServe()
 }
