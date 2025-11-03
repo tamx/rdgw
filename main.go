@@ -448,8 +448,8 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 					// OUT.Close()
 					return
 				}
-				stuck = append(stuck, buf[:size]...)
 				// fmt.Printf("Len: %d\n", size)
+				stuck = append(stuck, buf[:size]...)
 				for {
 					if len(stuck) < 5 {
 						break
@@ -458,7 +458,7 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 					realSize := (0xff & int(stuck[3])) | (0xff & int(stuck[2]) << 8)
 					realSize &= 0x3fff
 					if 0x80&stuck[1] != 0 {
-						realSize = (0xff & int(stuck[2])) | (0x7f & int(stuck[1]) << 8)
+						realSize = (0xff & int(stuck[2])) | (int(0x7f&stuck[1]) << 8)
 					}
 					if stuck[1] == 0x03 && stuck[2] == 0x03 {
 						realSize = (0xff & int(stuck[4])) | (0xff & int(stuck[3]) << 8)
@@ -475,7 +475,7 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 					packet = append(packet, stuck[:realSize]...)
 					err = WriteHTTPPacket(OUT, 0x0a, packet)
 					if err != nil {
-						log.Println(err)
+						println(err.Error())
 						return
 					}
 					stuck = stuck[realSize:]
@@ -578,7 +578,7 @@ func UDPHandler() {
 	fmt.Println("Server is Running at 0.0.0.0:" + strconv.Itoa(udpport))
 	udp, err := net.ListenPacket("udp4", "0.0.0.0:"+strconv.Itoa(udpport))
 	if err != nil {
-		log.Println(err)
+		println(err.Error())
 		return
 	}
 	defer udp.Close()
@@ -663,5 +663,7 @@ func main() {
 		Handler: nil,
 	}
 	http.HandleFunc("/", httpHandler)
-	server.ListenAndServe()
+	if err := server.ListenAndServe(); err != nil {
+		println(err.Error())
+	}
 }
