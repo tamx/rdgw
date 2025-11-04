@@ -59,6 +59,14 @@ func newWebSock(w http.ResponseWriter, r *http.Request) *websock {
 		Conn:         c,
 		lastResponse: time.Now(),
 	}
+	sock.Conn.SetPingHandler(func(msg string) error {
+		err := sock.Conn.WriteMessage(websocket.PongMessage,
+			[]byte(msg))
+		if err != nil {
+			return err
+		}
+		return nil
+	})
 	sock.keepAlive(time.Duration(60) * time.Second)
 	return &sock
 }
