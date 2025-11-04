@@ -443,6 +443,7 @@ func handle(IN io.ReadCloser, OUT io.WriteCloser) error {
 			for {
 				size, err := rdp.Read(buf)
 				if err != nil {
+					println(err.Error())
 					log.Println(err)
 					// IN.Close()
 					// OUT.Close()
