@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"net/http"
 	"time"
 
@@ -10,26 +9,36 @@ import (
 
 type websock struct {
 	// Conn   io.ReadWriteCloser
-	Conn   *websocket.Conn
-	Buffer []byte
+	Conn         *websocket.Conn
+	Buffer       []byte
+	lastResponse time.Time
 }
 
-func keepAlive(c *websocket.Conn, timeout time.Duration) {
-	lastResponse := time.Now()
-	c.SetPongHandler(func(msg string) error {
-		lastResponse = time.Now()
+func (sock *websock) keepAlive(timeout time.Duration) {
+	sock.lastResponse = time.Now()
+	sock.Conn.SetPongHandler(func(msg string) error {
+		sock.lastResponse = time.Now()
 		return nil
 	})
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// fmt.Printf("%v", r)
+				// err = status.Error(codes.Internal, "unexpected error")
+				println("catch panic.")
+				sock.Conn.Close()
+			}
+		}()
 		for {
-			err := c.WriteMessage(websocket.PingMessage, []byte("keepalive"))
+			err := sock.Conn.WriteMessage(websocket.PingMessage, []byte("keepalive"))
 			if err != nil {
 				return
 			}
-			time.Sleep(timeout / 2)
-			if time.Since(lastResponse) > timeout {
-				c.Close()
+			time.Sleep(timeout / 3)
+			if time.Since(sock.lastResponse) > timeout {
+				println("time out.")
+				sock.Conn.Close()
 				return
 			}
 		}
@@ -41,15 +50,24 @@ func newWebSock(w http.ResponseWriter, r *http.Request) *websock {
 	r.Method = "GET"
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("upgrade error")
-		log.Println(err)
+		println("upgrade error")
+		println(err.Error())
 		return nil
 	}
-	log.Println("Upgraded.")
-	keepAlive(c, time.Duration(10)*time.Second)
+	println("Upgraded.")
 	sock := websock{
-		Conn: c,
+		Conn:         c,
+		lastResponse: time.Now(),
 	}
+	sock.Conn.SetPingHandler(func(msg string) error {
+		err := sock.Conn.WriteMessage(websocket.PongMessage,
+			[]byte(msg))
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	sock.keepAlive(time.Duration(60) * time.Second)
 	return &sock
 }
 
@@ -62,6 +80,7 @@ func (sock *websock) Read(p []byte) (int, error) {
 		}
 		// log.Printf("recv: %s", message)
 		// println("Read:")
+		sock.lastResponse = time.Now()
 		data = message
 		// print(data)
 	}
