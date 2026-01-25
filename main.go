@@ -252,8 +252,7 @@ func UpgradeForHTTP(rw http.ResponseWriter, rdgOut bool) bool {
 	if rdgOut {
 		// conn.Write([]byte("\r\n"))
 		rw.Write([]byte{0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd})
-		flusher, ok := rw.(http.Flusher)
-		if ok {
+		if flusher, ok := rw.(http.Flusher); ok {
 			flusher.Flush()
 		}
 		return true
@@ -319,10 +318,10 @@ func WriteHTTPPacket(OUT io.Writer, packettype int, body []byte) error {
 	_, err := OUT.Write(packet)
 	if err != nil {
 		println("write error")
+		return err
 	}
 
-	flusher, ok := OUT.(http.Flusher)
-	if ok {
+	if flusher, ok := OUT.(http.Flusher); ok {
 		flusher.Flush()
 	}
 
@@ -655,25 +654,42 @@ func SetKeepAlive(conn net.Conn) error {
 	return nil
 }
 
-var out http.ResponseWriter
+type idList struct {
+	out     http.ResponseWriter
+	flusher http.Flusher
+	ch      chan error
+}
+
+var rdgOut map[string]idList = map[string]idList{}
 
 func httpHandler(w http.ResponseWriter, r *http.Request) {
 	authorization := r.Header.Get("Authorization")
-	// println(r.Method)
+	if !auth(authorization, w) {
+		return
+	}
+	println(r.Method)
+	// for name, values := range r.Header {
+	// 	for _, value := range values {
+	// 		println(name + ": " + value)
+	// 	}
+	// }
+	id := r.Header.Get("Rdg-Connection-Id")
 	if r.Method == "RDG_IN_DATA" || r.Method == "RPC_IN_DATA" {
 		if !UpgradeForHTTP(w, false) {
 			return
 		}
-		println("Accepted IN.")
 		defer r.Body.Close()
-		err := handle(r.Body, out)
-		if err != nil {
-			println(err.Error())
+		if out, ok := rdgOut[id]; ok {
+			println("Accepted IN.")
+			err := handle(r.Body, out.out)
+			if err != nil {
+				println(err.Error())
+			}
+			println("Start IN end.")
+			out.ch <- err
+		} else {
+			println("not found ID:" + id)
 		}
-		println("Start IN end.")
-		return
-	}
-	if !auth(authorization, w) {
 		return
 	}
 	if r.Method == "RDG_OUT_DATA" || r.Method == "RPC_OUT_DATA" {
@@ -683,9 +699,12 @@ func httpHandler(w http.ResponseWriter, r *http.Request) {
 			if !UpgradeForHTTP(w, true) {
 				return
 			}
-			out = w
 			println("Start OUT.")
-			ch := make(chan int, 1)
+			ch := make(chan error, 1)
+			rdgOut[id] = idList{
+				out: w,
+				ch:  ch,
+			}
 			<-ch
 			println("Start OUT end.")
 		} else {
