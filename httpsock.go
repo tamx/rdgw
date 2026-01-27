@@ -2,24 +2,28 @@ package main
 
 import (
 	"errors"
-	"net"
+	"io"
+	"net/http"
 	"strconv"
 )
 
 type httpsock struct {
-	IN     *net.TCPConn
-	OUT    *net.TCPConn
+	IN     io.ReadCloser
+	OUT    io.Writer
+	Ch     chan error
 	Buffer []byte
 }
 
-func newHttpSock(conn *net.TCPConn) *httpsock {
+func newHttpSock(out io.Writer, ch chan error) httpsock {
 	sock := httpsock{
-		IN: conn,
+		OUT: out,
+		Ch:  ch,
 	}
-	return &sock
+	return sock
 }
 
-func (sock *httpsock) Read(p []byte) (int, error) {
+// not used
+func (sock httpsock) ReadChunked(p []byte) (int, error) {
 	data := sock.Buffer
 	if data == nil {
 		line, _ := ReadLine(sock.IN) // skip until "\r\n"
@@ -56,17 +60,24 @@ func (sock *httpsock) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (sock *httpsock) Write(b []byte) (int, error) {
+func (sock httpsock) Write(b []byte) (int, error) {
 	// cLength := fmt.Sprintf("%x", len(b))
 	// fmt.Println(cLength)
 	// sock.IN.Write([]byte(cLength + "\n"))
 	// print(b)
-	return sock.IN.Write(b)
+	size, err := sock.OUT.Write(b)
+	if flusher, ok := sock.OUT.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return size, err
 }
 
-func (sock *httpsock) Close() error {
-	if sock.OUT != nil {
-		sock.OUT.Close()
+func (sock httpsock) Close() error {
+	if sock.IN != nil {
+		err := sock.IN.Close()
+		sock.Ch <- err
+		return err
 	}
-	return sock.IN.Close()
+	sock.Ch <- nil
+	return nil
 }
