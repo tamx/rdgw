@@ -282,7 +282,7 @@ func ReadHTTPPacket(IN io.ReadCloser) (byte, []byte, error) {
 	length |= (int(buf[0]) << 16)
 	_, err := IN.Read(buf)
 	if err != nil {
-		println("read error")
+		println("read error: " + err.Error())
 		return 0, nil, err
 	}
 	length |= (int(buf[0]) << 24)
@@ -317,12 +317,7 @@ func WriteHTTPPacket(OUT io.Writer, packettype int, body []byte) error {
 	// print(packet)
 	_, err := OUT.Write(packet)
 	if err != nil {
-		println("write error")
-		return err
-	}
-
-	if flusher, ok := OUT.(http.Flusher); ok {
-		flusher.Flush()
+		println("write error: " + err.Error())
 	}
 
 	return err
@@ -654,57 +649,41 @@ func SetKeepAlive(conn net.Conn) error {
 	return nil
 }
 
-type idList struct {
-	out     http.ResponseWriter
-	flusher http.Flusher
-	ch      chan error
-}
-
-var rdgOut map[string]idList = map[string]idList{}
+var rdgOut map[string]httpsock = map[string]httpsock{}
 
 func httpHandler(w http.ResponseWriter, r *http.Request) {
 	authorization := r.Header.Get("Authorization")
-	if !auth(authorization, w) {
-		return
-	}
-	println(r.Method)
-	// for name, values := range r.Header {
-	// 	for _, value := range values {
-	// 		println(name + ": " + value)
-	// 	}
-	// }
+	// println(r.Method)
 	id := r.Header.Get("Rdg-Connection-Id")
 	if r.Method == "RDG_IN_DATA" || r.Method == "RPC_IN_DATA" {
 		if !UpgradeForHTTP(w, false) {
 			return
 		}
+		println("Accepted IN.")
 		defer r.Body.Close()
 		if out, ok := rdgOut[id]; ok {
-			println("Accepted IN.")
-			err := handle(r.Body, out.out)
+			err := handle(r.Body, out)
 			if err != nil {
 				println(err.Error())
 			}
-			println("Start IN end.")
-			out.ch <- err
-		} else {
-			println("not found ID:" + id)
+			// out.Ch <- err
 		}
+		println("Start IN end.")
+		return
+	}
+	if !auth(authorization, w) {
 		return
 	}
 	if r.Method == "RDG_OUT_DATA" || r.Method == "RPC_OUT_DATA" {
 		println("Accepted OUT.")
 		upgrade := r.Header.Get("Upgrade")
-		if false && upgrade == "" {
+		if upgrade == "" {
 			if !UpgradeForHTTP(w, true) {
 				return
 			}
 			println("Start OUT.")
 			ch := make(chan error, 1)
-			rdgOut[id] = idList{
-				out: w,
-				ch:  ch,
-			}
+			rdgOut[id] = newHttpSock(w, ch)
 			<-ch
 			println("Start OUT end.")
 		} else {
