@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	digest "github.com/tamx/golang-digest"
@@ -157,10 +159,11 @@ func TestAuth(t *testing.T) {
 	defer restore()
 
 	usermap["user1"] = "pass1"
+	ctx := context.Background()
 
 	// 1. Missing Authorization header
 	rec := httptest.NewRecorder()
-	if ok := auth("", rec); ok {
+	if ok := auth(ctx, "", rec); ok {
 		t.Errorf("expected auth to fail for empty header")
 	}
 	if rec.Code != http.StatusUnauthorized {
@@ -170,18 +173,53 @@ func TestAuth(t *testing.T) {
 	// 2. Correct Basic Authentication
 	rec = httptest.NewRecorder()
 	authHeader := "Basic " + base64.StdEncoding.EncodeToString([]byte("user1:pass1"))
-	if ok := auth(authHeader, rec); !ok {
+	if ok := auth(ctx, authHeader, rec); !ok {
 		t.Errorf("expected auth to succeed for correct basic credentials")
 	}
 
 	// 3. Incorrect Basic Authentication
 	rec = httptest.NewRecorder()
 	authHeaderWrong := "Basic " + base64.StdEncoding.EncodeToString([]byte("user1:wrongpass"))
-	if ok := auth(authHeaderWrong, rec); ok {
+	if ok := auth(ctx, authHeaderWrong, rec); ok {
 		t.Errorf("expected auth to fail for incorrect basic credentials")
 	}
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestAuth_NTLMConnectionIsolation(t *testing.T) {
+	// Setup context with connection container for connection 1
+	ctx1 := context.WithValue(context.Background(), ntlmSessionKey, &NtlmSessionContainer{})
+	rec1 := httptest.NewRecorder()
+	
+	// Send raw string causing parse error in ParseAuthenticateMessage
+	// which acts as the initial negotiate step, generating a challenge
+	authHeader := "NTLM " + base64.StdEncoding.EncodeToString([]byte("dummy-negotiate-token"))
+	
+	ok1 := auth(ctx1, authHeader, rec1)
+	if ok1 {
+		t.Errorf("expected NTLM negotiate step to return false")
+	}
+	if rec1.Code != http.StatusUnauthorized {
+		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, rec1.Code)
+	}
+	wwwAuth := rec1.Header().Get("WWW-Authenticate")
+	if !strings.HasPrefix(wwwAuth, "NTLM ") {
+		t.Errorf("expected WWW-Authenticate header to start with NTLM, got %q", wwwAuth)
+	}
+	
+	// Verify connection 1 container got a session assigned
+	container1, _ := ctx1.Value(ntlmSessionKey).(*NtlmSessionContainer)
+	if container1.Session == nil {
+		t.Errorf("expected NTLM session to be created in connection 1 container")
+	}
+	
+	// Create another separate connection context
+	ctx2 := context.WithValue(context.Background(), ntlmSessionKey, &NtlmSessionContainer{})
+	container2, _ := ctx2.Value(ntlmSessionKey).(*NtlmSessionContainer)
+	if container2.Session != nil {
+		t.Errorf("expected brand new connection context container to have no active session")
 	}
 }
 
