@@ -206,6 +206,7 @@ func auth(auth string, rw http.ResponseWriter) bool {
 		if password == checkAuth(username) {
 			return true
 		}
+		responseUnauth(rw, "")
 	} else {
 		responseUnauth(rw, "")
 	}
