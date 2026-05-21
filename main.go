@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -133,10 +134,18 @@ func responseUnauth(w http.ResponseWriter, chaMsg string) {
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
-var session2 ntlm.ServerSession
+type contextKey struct{ name string }
 
-func authNtlm(rw http.ResponseWriter,
+var ntlmSessionKey = &contextKey{"ntlmSession"}
+
+type NtlmSessionContainer struct {
+	Session ntlm.ServerSession
+}
+
+func authNtlm(ctx context.Context, rw http.ResponseWriter,
 	auth, ntlmHeader string) bool {
+	container, _ := ctx.Value(ntlmSessionKey).(*NtlmSessionContainer)
+
 	auth = auth[strings.Index(auth, ntlmHeader)+len(ntlmHeader)+1:]
 	println("Auth: " + auth)
 	data, _ := base64.StdEncoding.DecodeString(auth)
@@ -144,14 +153,19 @@ func authNtlm(rw http.ResponseWriter,
 		int(ntlm.Version2))
 	if err != nil {
 		println(err.Error())
-		// session2, _ = ntlm.CreateServerSession(ntlm.Version2,
-		// 	ntlm.ConnectionlessMode)
-		session2, _ = ntlm.CreateServerSession(ntlm.Version2,
+		session, err := ntlm.CreateServerSession(ntlm.Version2,
 			ntlm.ConnectionOrientedMode)
-		challenge, err := session2.GenerateChallengeMessage()
+		if err != nil {
+			println("failed to create server session: " + err.Error())
+			return false
+		}
+		challenge, err := session.GenerateChallengeMessage()
 		if err != nil {
 			println(err.Error())
 			return false
+		}
+		if container != nil {
+			container.Session = session
 		}
 		chaMsg := ntlmHeader + " " +
 			base64.StdEncoding.
@@ -160,14 +174,22 @@ func authNtlm(rw http.ResponseWriter,
 		responseUnauth(rw, chaMsg)
 		return false
 	}
+
+	if container == nil || container.Session == nil {
+		println("no active NTLM session for this connection")
+		responseUnauth(rw, "")
+		return false
+	}
+
+	session := container.Session
 	username := authMessage.UserName.String()
 	domain := authMessage.DomainName.String()
 	workstation := authMessage.Workstation.String()
 	println("WorkStation: " + workstation)
 	println("User: " + username + " Domain: " + domain)
 	password := checkAuth(username)
-	session2.SetUserInfo(username, password, domain)
-	err = session2.ProcessAuthenticateMessage(authMessage)
+	session.SetUserInfo(username, password, domain)
+	err = session.ProcessAuthenticateMessage(authMessage)
 	if err != nil {
 		println(err.Error())
 		responseUnauth(rw, "")
@@ -176,15 +198,15 @@ func authNtlm(rw http.ResponseWriter,
 	return true
 }
 
-func auth(auth string, rw http.ResponseWriter) bool {
+func auth(ctx context.Context, auth string, rw http.ResponseWriter) bool {
 	if strings.Contains(auth, "NTLM") {
 		// freerdp
-		if authNtlm(rw, auth, "NTLM") {
+		if authNtlm(ctx, rw, auth, "NTLM") {
 			return true
 		}
 	} else if strings.Contains(auth, "Negotiate") {
 		// windows?
-		if authNtlm(rw, auth, "Negotiate") {
+		if authNtlm(ctx, rw, auth, "Negotiate") {
 			return true
 		}
 		// } else if strings.Contains(auth, "Digest") {
@@ -672,7 +694,7 @@ func httpHandler(w http.ResponseWriter, r *http.Request) {
 		println("Start IN end.")
 		return
 	}
-	if !auth(authorization, w) {
+	if !auth(r.Context(), authorization, w) {
 		return
 	}
 	if r.Method == "RDG_OUT_DATA" || r.Method == "RPC_OUT_DATA" {
@@ -725,6 +747,9 @@ func main() {
 	server := http.Server{
 		Addr:    "0.0.0.0:13389",
 		Handler: nil,
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			return context.WithValue(ctx, ntlmSessionKey, &NtlmSessionContainer{})
+		},
 	}
 	http.HandleFunc("/", httpHandler)
 	if err := server.ListenAndServe(); err != nil {
